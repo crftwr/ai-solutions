@@ -27,7 +27,7 @@ A separate `scripts/summarize.py` reads multiple per-run `report.csv` files and 
 3. Records are buffered in memory and flushed to `trace.jsonl` after each prefill/decode step (capped by `PROFSTATS_MAX_STEPS`).
 4. Output directory is configured via `PROFSTATS_OUT_DIR`.
 
-The CLI front-end `vlm-op-profiler` is a thin C++17 wrapper that sets `LD_PRELOAD`/`DYLD_INSERT_LIBRARIES` and the output-path env vars, then `exec`s `llama-mtmd-cli` (VLMs) or `llama-cli` (text-only). It accepts the same arguments as those inner binaries.
+The CLI front-end `vlm-op-profiler` is a thin Python script (`cli/vlm_op_profiler.py`) that sets `LD_PRELOAD`/`DYLD_INSERT_LIBRARIES` and the output-path env vars, then `exec`s `llama-mtmd-cli` (VLMs) or `llama-cli` (text-only). It accepts the same arguments as those inner binaries.
 
 ### Phase tracker heuristic
 
@@ -56,7 +56,7 @@ vlm_op_profiler/
 │   └── phase_tracker.cpp    Tags each graph as prefill (max_m > 1) or decode (max_m == 1)
 │
 ├── cli/
-│   └── vlm_op_profiler.cpp  Sets LD_PRELOAD/DYLD_INSERT_LIBRARIES + PROFSTATS_* env vars,
+│   └── vlm_op_profiler.py   Sets LD_PRELOAD/DYLD_INSERT_LIBRARIES + PROFSTATS_* env vars,
 │                            then exec's llama-mtmd-cli (VLM) or llama-cli (text)
 │
 ├── scripts/

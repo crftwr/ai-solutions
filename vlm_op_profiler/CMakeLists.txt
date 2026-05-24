@@ -92,21 +92,10 @@ if(APPLE)
 endif()
 
 # ---------------------------------------------------------------------------
-# vlm-op-profiler  (CLI process wrapper — no direct llama linkage required)
-#
-# The CLI's job is to set up the environment (DYLD_INSERT_LIBRARIES, output
-# path env vars) and exec llama-mtmd-cli.  It is a standalone C++17 binary.
+# vlm-op-profiler CLI is a Python script (cli/vlm_op_profiler.py).
+# No compiled target is needed here; the Dockerfile copies the script into
+# the runtime image and invokes it with python3.
 # ---------------------------------------------------------------------------
-add_executable(vlm-op-profiler
-    cli/vlm_op_profiler.cpp
-)
-
-target_compile_features(vlm-op-profiler PRIVATE cxx_std_17)
-
-# Place the binary alongside the shared library for easy discovery.
-set_target_properties(vlm-op-profiler PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
-)
 
 # ---------------------------------------------------------------------------
 # Optional: clang-format check target
@@ -116,7 +105,6 @@ if(CLANG_FORMAT_BIN)
     file(GLOB_RECURSE ALL_CPP_SOURCES
         "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/cli/*.cpp"
     )
     add_custom_target(clang-format-check
         COMMAND ${CLANG_FORMAT_BIN} --dry-run --Werror ${ALL_CPP_SOURCES}

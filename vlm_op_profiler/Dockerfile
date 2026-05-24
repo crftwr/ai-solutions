@@ -47,7 +47,9 @@ RUN test -f third_party/llama.cpp/CMakeLists.txt || \
       echo "Run from the ai-solutions root: git submodule update --init --recursive"; \
       exit 1; }
 
-# Configure — build backend_stats + vlm-op-profiler + llama-mtmd-cli + llama-cli
+# Configure — build backend_stats + llama-mtmd-cli + llama-cli.
+# The vlm-op-profiler CLI is a Python script (cli/vlm_op_profiler.py) and
+# needs no compilation step.
 # LLAMA_BUILD_TOOLS=ON enables tools/ (contains llama-mtmd-cli and support libs).
 # LLAMA_BUILD_COMMON=ON is a prerequisite for tools.
 # LLAMA_BUILD_SERVER=ON enables tools/cli/ which builds llama-cli (text inference).
@@ -62,9 +64,9 @@ RUN cmake -S . -B build \
       -DCMAKE_C_COMPILER=clang \
       -DCMAKE_CXX_COMPILER=clang++
 
-# Build our targets
+# Build our C++ target (interceptor shared library only)
 RUN cmake --build build -j"$(nproc)" \
-      --target backend_stats vlm-op-profiler
+      --target backend_stats
 
 # Build llama-mtmd-cli (VLM inference binary we exec into)
 RUN cmake --build build -j"$(nproc)" \
@@ -91,10 +93,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# ---- Binaries ---------------------------------------------------------------
+# ---- CLI script -------------------------------------------------------------
 
-# Our profiler CLI (wrapper that sets LD_PRELOAD and exec's llama-mtmd-cli)
-COPY --from=builder /src/build/vlm-op-profiler     ./vlm-op-profiler
+# vlm-op-profiler is a Python script; no compiled binary needed.
+# HERE (os.path.realpath(__file__) dir) resolves to /app, which is also where
+# libbackend_stats.so and llama-mtmd-cli land — the script finds them automatically.
+COPY --chmod=755 cli/vlm_op_profiler.py ./vlm_op_profiler.py
 
 # Stats interceptor shared library (loaded via LD_PRELOAD)
 COPY --from=builder /src/build/libbackend_stats.so ./libbackend_stats.so
@@ -131,5 +135,5 @@ ENV LD_LIBRARY_PATH=/app
 # Models and results directories are expected to be mounted at runtime.
 VOLUME ["/app/models", "/app/results"]
 
-ENTRYPOINT ["./vlm-op-profiler"]
+ENTRYPOINT ["python3", "./vlm_op_profiler.py"]
 CMD ["--help"]
