@@ -20,21 +20,24 @@ A separate `scripts/summarize.py` reads multiple per-run `report.csv` files and 
 
 ## Approach
 
-`llama.cpp`'s `ggml` library compiles all inference into a static DAG (`ggml_cgraph`) before dispatching to a backend. Every node already carries full type and shape metadata: op kind (`GGML_OP_MUL_MAT`, `GGML_OP_SOFT_MAX`, …), source tensor types (`GGML_TYPE_Q4_K`, `GGML_TYPE_Q8_0`, `GGML_TYPE_BF16`, …), and shapes/strides. We exploit this by implementing a **profiling backend wrapper** that:
+`llama.cpp`'s `ggml` library compiles all inference into a static DAG (`ggml_cgraph`) before dispatching to a backend. Every node already carries full type and shape metadata: op kind (`GGML_OP_MUL_MAT`, `GGML_OP_SOFT_MAX`, …), source tensor types (`GGML_TYPE_Q4_K`, `GGML_TYPE_Q8_0`, `GGML_TYPE_BF16`, …), and shapes/strides. We exploit this via **LD_PRELOAD function interposition** without patching llama.cpp:
 
-1. Implements the `ggml_backend_i` interface.
-2. Holds a pointer to an inner backend (CPU, Metal, CUDA — selected at runtime) and delegates all real compute to it.
-3. In `graph_compute`, walks `cgraph->nodes`, records statistics for each node, then forwards the graph to the inner backend.
-4. Buffers records in memory and flushes them to `trace.jsonl` at the end of each prefill / decode step.
+1. `libbackend_stats.so` (Linux) / `libbackend_stats.dylib` (macOS) interposes `ggml_backend_sched_graph_compute` and `ggml_backend_sched_graph_compute_async` using `dlsym(RTLD_NEXT, …)` to obtain the real symbols at library-load time.
+2. On each intercepted call, the library walks every node in `cgraph->nodes`, records per-node stats (op, dtypes, shapes, MACs, layer category, phase), then calls through to the real scheduler — compute is **bit-identical** to an unmodified run.
+3. Records are buffered in memory and flushed to `trace.jsonl` after each prefill/decode step (capped by `PROFSTATS_MAX_STEPS`).
+4. Output directory is configured via `PROFSTATS_OUT_DIR`.
 
-We deliberately **do not patch ggml or llama.cpp**. The profiler is built out-of-tree and pulled into `llama.cpp` only via the `ggml_backend_register` mechanism (loaded as a shared library through `LD_PRELOAD` on Linux, `DYLD_INSERT_LIBRARIES` on macOS). This keeps us forward-compatible as `llama.cpp` evolves.
+The CLI front-end `vlm-op-profiler` is a thin C++17 wrapper that sets `LD_PRELOAD`/`DYLD_INSERT_LIBRARIES` and the output-path env vars, then `exec`s `llama-mtmd-cli` (VLMs) or `llama-cli` (text-only). It accepts the same arguments as those inner binaries.
 
-The CLI front-end `vlm-op-profiler` is a thin wrapper around the standard `llama-mtmd-cli` binary that sets up the profiling backend and output paths, then accepts the same VLM input arguments (model path, image, prompt).
+### Phase tracker heuristic
+
+`phase_tracker.cpp` tags each graph as `prefill` (max M dimension across MUL_MAT nodes > 1) or `decode` (max M == 1). This is a structural heuristic — it works for standard transformer decode where each step processes a single token.
 
 ### Alternatives considered
 
-- **Patching `ggml_compute_forward` with a callback.** Lower-overhead and gives runtime call counts directly, but requires maintaining a fork of `llama.cpp`. Rejected for the default path; may be revisited if the backend wrapper proves too coarse.
-- **Static graph dump via `ggml_graph_print`.** Cheapest to prototype but does not capture how `K`/sequence-length grow during decode. Useful as a sanity check, not as the primary mechanism.
+- **`ggml_backend_i` wrapper (originally planned).** Implements the backend interface and delegates to an inner backend. Abandoned because the interface changes frequently across llama.cpp versions and the per-backend registration approach requires patching the scheduler dispatch loop. LD_PRELOAD interposition at the scheduler level is more stable.
+- **Patching `ggml_compute_forward` with a callback.** Lower-overhead and gives runtime call counts directly, but requires maintaining a fork of `llama.cpp`. Rejected.
+- **Static graph dump via `ggml_graph_print`.** Cheapest to prototype but does not capture how `K`/sequence-length grow during decode. Useful as a sanity check only.
 
 ---
 
@@ -45,27 +48,33 @@ All paths below are relative to `vlm_op_profiler/` inside the `ai-solutions` mon
 ```
 vlm_op_profiler/
 ├── src/
-│   ├── backend_stats.cpp    Profiling ggml backend; delegates to inner backend, records per-node stats
-│   ├── backend_stats.h      C API: register/unregister, set output path, select inner backend
+│   ├── backend_stats.cpp    LD_PRELOAD interceptor: shadows ggml_backend_sched_graph_compute*,
+│   │                        walks cgraph, records per-node stats, calls through to real symbol
+│   ├── backend_stats.h      Internal types and env-var names (PROFSTATS_OUT_DIR, PROFSTATS_MAX_STEPS)
 │   ├── graph_walker.cpp     Per-op stat extraction: dtype, shape, M/N/K, MAC count
-│   ├── layer_classifier.cpp Heuristic mapping of tensor name -> layer category
-│   └── phase_tracker.cpp    Tags each graph as prefill or decode via llama session callbacks
+│   ├── layer_classifier.cpp Heuristic tensor-name → layer-category table (44 patterns)
+│   └── phase_tracker.cpp    Tags each graph as prefill (max_m > 1) or decode (max_m == 1)
 │
 ├── cli/
-│   └── vlm_op_profiler.cpp  Wrapper around llama-mtmd-cli; configures backend and output dir
+│   └── vlm_op_profiler.cpp  Sets LD_PRELOAD/DYLD_INSERT_LIBRARIES + PROFSTATS_* env vars,
+│                            then exec's llama-mtmd-cli (VLM) or llama-cli (text)
 │
 ├── scripts/
-│   ├── fetch_models.sh      Download GGUF VLM weights from Hugging Face into models/
+│   ├── fetch_models_hf.py   Download GGUF VLM weights from Hugging Face (suite mode)
 │   ├── run_suite.sh         Execute the profiler across the model x prompt x image matrix
 │   ├── aggregate.py         Read trace.jsonl files, emit report.csv + report.md
 │   └── summarize.py         Cross-model executive summary
 │
+├── assets/
+│   └── example.jpg          64×64 synthetic JPEG for smoke tests (committed to repo)
+│
 ├── third_party/
 │   └── llama.cpp/           git submodule (registered in ai-solutions/.gitmodules),
-│                            pinned to a known-good upstream tag
+│                            pinned to a known-good upstream commit
 │
-├── models/                  gitignored; populated by scripts/fetch_models.sh
+├── models/                  gitignored; populated by make fetch-model-text / fetch-models
 ├── results/                 gitignored; one subdirectory per run
+├── .env                     gitignored; set HF_TOKEN=hf_... for gated models (see .env.example)
 └── docs/
     ├── design.md            Design notes (approach, alternatives, validation methodology)
     ├── output_format.md     Schema for trace.jsonl, report.csv, summary.md
@@ -114,13 +123,19 @@ pip install -r requirements.txt
 
 Phased so each step produces a usable artifact.
 
-### Phase 0 — repo skeleton (0.5 day)
+### Phase 0 — repo skeleton ✅
 
-Repo scaffolding, CMake, submodule pin, CI that builds `llama.cpp` plus an empty `backend_stats.cpp` stub and links them together. No statistics yet. Exit criterion: `cmake --build` is green and `vlm-op-profiler --help` prints usage.
+Repo scaffolding, CMake, submodule pin. `cmake --build` green, `vlm-op-profiler --help` prints usage.
 
-### Phase 1 — minimal stats backend (2 days)
+### Phase 1 — LD_PRELOAD interceptor ✅
 
-Implement `ggml_backend_i` for a backend that holds a pointer to an inner backend and forwards `alloc_buffer`, `set_tensor_async`, `get_tensor_async`, `synchronize`, `supports_op`. In `graph_compute`, walk `cgraph->nodes` and emit one JSONL line per node (op name, src0/src1/dst dtypes and shapes), then forward the graph to the inner backend. Register the backend from a shared-library constructor. Exit criterion: end-to-end run on a tiny text-only model (e.g. TinyLlama) produces a non-empty `trace.jsonl` and output is bit-identical to running the inner backend directly.
+LD_PRELOAD interposition on `ggml_backend_sched_graph_compute` (and `_async`). For each graph, walks nodes and emits one JSONL line per `MUL_MAT` node (op, dtypes, shape, M/N/K, MACs, layer category, phase). Phase tagged by max M dimension heuristic. Layer classifier covers 44 tensor-name patterns across LLaMA, SmolVLM, LLaVA, Qwen2-VL, and common variants.
+
+**Validated:** Llama-3.2-1B-Instruct produces 5030 records across 2 prefill + 10 decode steps, 0 unclassified MUL_MAT, 100.38 GMACs total. See `docs/supported_models.md` for per-model status.
+
+Env vars read by `libbackend_stats`:
+- `PROFSTATS_OUT_DIR` — output directory for `trace.jsonl`
+- `PROFSTATS_MAX_STEPS` — stop after N decode steps (0 = unlimited)
 
 ### Phase 2 — MatMul MAC accounting (1 day)
 
@@ -136,7 +151,7 @@ Parse `tensor->name` (e.g. `blk.0.attn_q.weight`, `vision_model.encoder.layers.0
 
 ### Phase 5 — model suite & runner (1 day)
 
-`fetch_models.sh` downloads the default suite into `models/`. Default suite is chosen for architectural diversity:
+`scripts/fetch_models_hf.py` (invoked via `make fetch-models-suite`) downloads the default suite into `models/`. Default suite is chosen for architectural diversity:
 
 - LLaVA-style (e.g. LLaVA-1.6)
 - Qwen2-VL / Qwen2.5-VL family

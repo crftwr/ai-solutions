@@ -18,20 +18,48 @@ when a model is validated or when a known issue is resolved.
 
 | Model | Architecture | GGUF source | Status | Notes |
 |-------|-------------|------------|--------|-------|
-| LLaVA-1.6 Mistral 7B | LLaVA / CLIP + Mistral | HuggingFace `cmp-nct/gguf-llava-v1.6-mistral-7b` | 🔲 | |
+| Llama-3.2-1B-Instruct (text only) | Llama 3.2 | `bartowski/Llama-3.2-1B-Instruct-GGUF` | ✅ | Smoke test; confirms interceptor captures prefill+decode. No VLM encoder. |
+| LLaVA-1.6 Mistral 7B | LLaVA / CLIP + Mistral | `cjpais/llava-1.6-mistral-7b-gguf` | 🔲 | |
 | LLaVA-1.6 Vicuna 13B | LLaVA / CLIP + Vicuna | HuggingFace | 🔲 | |
-| Qwen2-VL 7B Instruct | Qwen2-VL | HuggingFace `Qwen/Qwen2-VL-7B-Instruct-GGUF` | 🔲 | |
+| Qwen2-VL 7B Instruct | Qwen2-VL | `Qwen/Qwen2-VL-7B-Instruct-GGUF` | 🔲 | |
 | Qwen2.5-VL 7B Instruct | Qwen2.5-VL | HuggingFace | 🔲 | |
 | Llama-3.2-11B-Vision | Llama 3.2 Vision | HuggingFace | 🔲 | |
 | MiniCPM-V 2.6 | MiniCPM-V | HuggingFace | 🔲 | |
 | Pixtral 12B | Pixtral | HuggingFace | 🔲 | |
 | Phi-3.5-Vision Instruct | Phi-3.5-V | HuggingFace | 🔲 | |
-| SmolVLM | SmolVLM | HuggingFace | 🔲 | |
+| SmolVLM-Instruct | SmolVLM | `ggml-org/SmolVLM-Instruct-GGUF` | ❌ | See SmolVLM notes below. |
 | Idefics3-8B | Idefics3 / SMOLLM | HuggingFace | 🔲 | |
 
 ---
 
 ## Architecture-specific notes
+
+### SmolVLM-Instruct (ggml-org/SmolVLM-Instruct-GGUF)
+
+**Status: ❌ blocked — `invalid token[6] = -1` during prompt evaluation.**
+
+The warmup pass (run with an empty prompt) completes successfully and produces
+a valid `trace.jsonl` with correct phase labels and MUL_MAT classification.
+However, the actual inference pass with `--image` fails during the first decode
+batch with:
+
+```
+E init: invalid token[6] = -1
+E decode: failed to initialize batch
+E failed to eval chunk 0
+```
+
+Root cause: when `llama-mtmd-cli` injects image patch tokens into the prompt
+batch, one token has ID `-1` (unknown/out-of-vocabulary). This appears to be a
+mismatch between the image tokenizer expected by the current `llama.cpp` commit
+and the format used by the `ggml-org` GGUF file.
+
+**Workaround:** the warmup graphs do capture a representative prefill forward
+pass (one full forward through all 32 transformer layers), providing enough
+data for architecture analysis even without a successful decode step.
+
+**Resolution:** test again after bumping the `llama.cpp` submodule — the
+`ggml-org` team updates SmolVLM support in sync with new llama.cpp releases.
 
 ### LLaVA family
 - Weight tensor names use `blk.<N>.attn_q.weight` etc. for the LLM body.

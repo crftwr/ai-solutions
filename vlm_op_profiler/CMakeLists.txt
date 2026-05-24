@@ -31,9 +31,15 @@ endif()
 #   LLAMA_BUILD_TESTS=OFF — avoid pulling in test deps.
 #   LLAMA_BUILD_EXAMPLES=ON — builds llama-mtmd-cli which is our inner binary.
 # ---------------------------------------------------------------------------
-set(GGML_BACKEND_DL   ON  CACHE BOOL "Enable dynamic backend loading" FORCE)
-set(LLAMA_BUILD_TESTS OFF CACHE BOOL "Skip llama.cpp tests" FORCE)
-set(LLAMA_BUILD_EXAMPLES ON CACHE BOOL "Build llama-mtmd-cli" FORCE)
+set(GGML_BACKEND_DL      ON  CACHE BOOL "Enable dynamic backend loading" FORCE)
+set(LLAMA_BUILD_TESTS    OFF CACHE BOOL "Skip llama.cpp tests" FORCE)
+set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "Skip llama.cpp examples" FORCE)
+# tools/ contains llama-mtmd-cli; LLAMA_BUILD_COMMON is a prerequisite.
+set(LLAMA_BUILD_COMMON   ON  CACHE BOOL "Build llama-common (required for tools)" FORCE)
+set(LLAMA_BUILD_TOOLS    ON  CACHE BOOL "Build llama tools (llama-mtmd-cli etc.)" FORCE)
+# LLAMA_BUILD_SERVER=ON enables tools/cli/ which contains llama-cli (text inference).
+# llama-cli is used for the text-only smoke test (make smoke-test-text).
+set(LLAMA_BUILD_SERVER   ON  CACHE BOOL "Build llama server + llama-cli" FORCE)
 
 add_subdirectory(third_party/llama.cpp)
 
@@ -62,10 +68,14 @@ target_include_directories(backend_stats
         ${GGML_INCLUDE_DIRS}
 )
 
-# Link against ggml (provides ggml_backend_register, ggml_graph_node, etc.)
+# Link against ggml (for type declarations and ggml_graph_node, ggml_type_name, etc.)
+# Also link libdl for dlsym(RTLD_NEXT, …) used by the LD_PRELOAD interceptor.
 target_link_libraries(backend_stats PRIVATE ggml)
+if(UNIX AND NOT APPLE)
+    target_link_libraries(backend_stats PRIVATE dl)
+endif()
 
-# Ensure we get the GGML_BACKEND_DL macro so GGML_BACKEND_DL_IMPL expands.
+# Provide GGML_BACKEND_DL macro so GGML_BACKEND_DL_IMPL expands (future use).
 target_compile_definitions(backend_stats PRIVATE GGML_BACKEND_DL)
 
 set_target_properties(backend_stats PROPERTIES
