@@ -92,29 +92,19 @@ vlm_op_profiler/
 
 ## Build & dependencies
 
-- **C/C++ toolchain:** clang or gcc with C++17; cmake >= 3.22.
-- **llama.cpp:** vendored as a git submodule at `vlm_op_profiler/third_party/llama.cpp` (registered in the `ai-solutions` repo root); built with `-DGGML_BACKEND_DL=ON` so the stats backend can be loaded dynamically.
-- **Python:** 3.11+ with `pandas`, `numpy`, `pyarrow`, `jinja2` (see `requirements.txt`) for aggregation/reporting.
+- **Docker:** all C/C++ toolchain, cmake, and Python dependencies are bundled inside the Docker image. No local toolchain is required.
+- **llama.cpp:** vendored as a git submodule at `vlm_op_profiler/third_party/llama.cpp` (registered in the `ai-solutions` repo root); built inside Docker with `-DGGML_BACKEND_DL=ON`.
+- **Python:** 3.11+ with `pandas`, `numpy`, `pyarrow`, `jinja2` (see `requirements.txt`) — bundled in the image; only needed locally if running aggregation scripts outside Docker.
 - **Disk:** ~80 GB free for the default model suite at int8 quantization.
 
 Bootstrap (run from `vlm_op_profiler/`):
 
 ```bash
-# From the ai-solutions repo root — initialise llama.cpp submodule:
+# From the ai-solutions repo root — initialise the llama.cpp submodule:
 git submodule update --init --recursive
 
 # Then from vlm_op_profiler/:
-make setup        # configures CMake and creates .venv
-make build        # compiles backend_stats shared lib + CLI
-```
-
-Or manually:
-
-```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_BACKEND_DL=ON
-cmake --build build -j
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+make docker-build   # builds the image (~10–20 min first time)
 ```
 
 ---

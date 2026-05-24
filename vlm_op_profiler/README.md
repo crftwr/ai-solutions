@@ -8,8 +8,6 @@ This is a **measurement tool only**. It does not ship model weights, run its own
 
 ## Quick start
 
-### Docker (recommended — no local cmake required)
-
 ```bash
 # From the ai-solutions repo root — initialise the llama.cpp submodule:
 git submodule update --init --recursive
@@ -49,16 +47,6 @@ docker run --rm \
   --image   /app/assets/example.jpg \
   --out-dir /app/results/llava-test \
   -p "Describe this image in detail."
-```
-
-### Local build (requires cmake ≥ 3.22 and clang/gcc)
-
-```bash
-git submodule update --init --recursive  # from repo root
-make setup   # cmake configure + Python venv
-make build   # compile backend_stats.so + vlm-op-profiler CLI
-
-./build/vlm-op-profiler --help
 ```
 
 ---
@@ -123,11 +111,9 @@ See [docs/design.md](docs/design.md) for the full design and alternatives consid
 
 | Dependency | Version | Notes |
 |-----------|---------|-------|
-| Docker | ≥ 20.10 | **Recommended** — bundles all build deps |
-| clang / gcc | — | C++17; only needed for local build |
-| cmake | ≥ 3.22 | Only needed for local build |
-| Python | ≥ 3.11 | For aggregation scripts |
-| pandas / numpy / pyarrow / jinja2 | see `requirements.txt` | |
+| Docker | ≥ 20.10 | Required — bundles the C++ toolchain, cmake, llama.cpp, and Python env |
+| Python | ≥ 3.11 | For running aggregation scripts outside Docker (optional) |
+| pandas / numpy / pyarrow / jinja2 | see `requirements.txt` | Only needed when running scripts outside Docker |
 
 ---
 
@@ -147,9 +133,6 @@ See [docs/design.md](docs/design.md) for the full design and alternatives consid
 | `make run-suite` | Run profiler across default model × prompt × image matrix |
 | `make aggregate` | Run `scripts/aggregate.py` over `results/` |
 | `make test` | Run Python unit tests (`pytest`) |
-| `make setup` | Local: submodule init + cmake configure + `.venv` |
-| `make build` | Local: `cmake --build build -j` |
-| `make clean` | Remove `build/` and `.venv/` |
 
 ---
 
