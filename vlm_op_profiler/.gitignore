@@ -1,0 +1,25 @@
+# Build output
+build/
+build-*/
+
+# Python virtual environment
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Model weights (never commit)
+models/
+
+# Profiler run outputs (never commit)
+results/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo

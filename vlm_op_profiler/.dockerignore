@@ -1,0 +1,25 @@
+# Build output
+build/
+build-*/
+
+# Python venv and cache
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Model weights (large; mount at runtime)
+models/
+
+# Run outputs
+results/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Git history (not needed in Docker build context)
+# NOTE: keep .git so cmake can read the commit hash

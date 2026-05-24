@@ -2,7 +2,7 @@
 
 A tooling project for collecting tensor-operation statistics from `llama.cpp` when running vision-language models (VLMs). For each model, it produces a per-op breakdown of `ggml` nodes executed, the input/output dtype combinations involved, shapes, MAC counts, and call frequencies. The intended consumer is hardware/kernel design work that needs to know which low-precision dot-product patterns (int4, int8, mxfp4, fp8, bf16, with int32 or bf16 accumulation) actually dominate inference compute on real VLM workloads.
 
-This repository is a **measurement tool only**. It does not ship model weights, does not run any inference engine of its own, and does not modify `llama.cpp`'s compute kernels — it only observes.
+This solution lives under `vlm_op_profiler/` inside the `ai-solutions` monorepo. It is a **measurement tool only**: it does not ship model weights, does not run any inference engine of its own, and does not modify `llama.cpp`'s compute kernels — it only observes.
 
 ---
 
@@ -38,49 +38,70 @@ The CLI front-end `vlm-op-profiler` is a thin wrapper around the standard `llama
 
 ---
 
-## Repository layout
+## Directory layout
+
+All paths below are relative to `vlm_op_profiler/` inside the `ai-solutions` monorepo.
 
 ```
-src/
-  backend_stats.cpp        Profiling ggml backend; delegates to inner backend, records per-node stats
-  backend_stats.h          C API: register/unregister, set output path, select inner backend
-  graph_walker.cpp         Per-op stat extraction: dtype, shape, M/N/K, MAC count
-  layer_classifier.cpp     Heuristic mapping of tensor name -> layer category
-  phase_tracker.cpp        Tags each graph as prefill or decode via llama session callbacks
-
-cli/
-  vlm_op_profiler.cpp      Wrapper around llama-mtmd-cli; configures backend and output dir
-
-scripts/
-  fetch_models.sh          Download GGUF VLM weights from Hugging Face into models/
-  run_suite.sh             Execute the profiler across the model x prompt x image matrix
-  aggregate.py             Read trace.jsonl files, emit report.csv + report.md
-  summarize.py             Cross-model executive summary
-
-third_party/
-  llama.cpp/               git submodule, pinned to a known-good upstream tag
-
-models/                    gitignored; populated by scripts/fetch_models.sh
-results/                   gitignored; one subdirectory per run
-docs/
-  design.md                Design notes (approach, alternatives, validation methodology)
-  output_format.md         Schema for trace.jsonl, report.csv, summary.md
-  supported_models.md      VLMs known to work end-to-end, with per-model notes
+vlm_op_profiler/
+├── src/
+│   ├── backend_stats.cpp    Profiling ggml backend; delegates to inner backend, records per-node stats
+│   ├── backend_stats.h      C API: register/unregister, set output path, select inner backend
+│   ├── graph_walker.cpp     Per-op stat extraction: dtype, shape, M/N/K, MAC count
+│   ├── layer_classifier.cpp Heuristic mapping of tensor name -> layer category
+│   └── phase_tracker.cpp    Tags each graph as prefill or decode via llama session callbacks
+│
+├── cli/
+│   └── vlm_op_profiler.cpp  Wrapper around llama-mtmd-cli; configures backend and output dir
+│
+├── scripts/
+│   ├── fetch_models.sh      Download GGUF VLM weights from Hugging Face into models/
+│   ├── run_suite.sh         Execute the profiler across the model x prompt x image matrix
+│   ├── aggregate.py         Read trace.jsonl files, emit report.csv + report.md
+│   └── summarize.py         Cross-model executive summary
+│
+├── third_party/
+│   └── llama.cpp/           git submodule (registered in ai-solutions/.gitmodules),
+│                            pinned to a known-good upstream tag
+│
+├── models/                  gitignored; populated by scripts/fetch_models.sh
+├── results/                 gitignored; one subdirectory per run
+└── docs/
+    ├── design.md            Design notes (approach, alternatives, validation methodology)
+    ├── output_format.md     Schema for trace.jsonl, report.csv, summary.md
+    └── supported_models.md  VLMs known to work end-to-end, with per-model notes
 ```
+
+> **Monorepo note:** the `llama.cpp` git submodule is registered in `ai-solutions/.gitmodules` (the monorepo root), not inside `vlm_op_profiler/`. To register it:
+> ```bash
+> # From the ai-solutions repo root:
+> git submodule add https://github.com/ggerganov/llama.cpp vlm_op_profiler/third_party/llama.cpp
+> ```
+> Thereafter, the standard `git submodule update --init --recursive` from the repo root initialises it.
 
 ---
 
 ## Build & dependencies
 
 - **C/C++ toolchain:** clang or gcc with C++17; cmake >= 3.22.
-- **llama.cpp:** vendored as submodule; built with `-DGGML_BACKEND_DL=ON` so the stats backend can be loaded dynamically.
+- **llama.cpp:** vendored as a git submodule at `vlm_op_profiler/third_party/llama.cpp` (registered in the `ai-solutions` repo root); built with `-DGGML_BACKEND_DL=ON` so the stats backend can be loaded dynamically.
 - **Python:** 3.11+ with `pandas`, `numpy`, `pyarrow`, `jinja2` (see `requirements.txt`) for aggregation/reporting.
 - **Disk:** ~80 GB free for the default model suite at int8 quantization.
 
-Bootstrap:
+Bootstrap (run from `vlm_op_profiler/`):
 
 ```bash
+# From the ai-solutions repo root — initialise llama.cpp submodule:
 git submodule update --init --recursive
+
+# Then from vlm_op_profiler/:
+make setup        # configures CMake and creates .venv
+make build        # compiles backend_stats shared lib + CLI
+```
+
+Or manually:
+
+```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_BACKEND_DL=ON
 cmake --build build -j
 python -m venv .venv && source .venv/bin/activate
@@ -173,7 +194,7 @@ Full schema in `docs/output_format.md`.
 - **Python:** `ruff` for lint and format, type hints required on public functions, `pytest` for the aggregation scripts.
 - **Determinism:** the profiler must not introduce nondeterminism. Any feature that requires sampling is gated behind an explicit `--sample` flag.
 - **No model weights or run outputs in git.** `models/` and `results/` are `.gitignore`d. Anything reproducible from a script must not be checked in.
-- **Upstream tracking:** the `llama.cpp` submodule is updated only via a deliberate bump commit. The upstream commit hash and any required patches go in the bump commit's body, and the regression test is re-run before merge.
+- **Upstream tracking:** the `llama.cpp` submodule is updated only via a deliberate bump commit made from the `ai-solutions` root. The upstream commit hash and any required patches go in the bump commit's body, and the regression test is re-run before merge.
 
 ---
 
