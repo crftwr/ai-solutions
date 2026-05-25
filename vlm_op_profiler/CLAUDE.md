@@ -172,9 +172,30 @@ Fixed fallback: was returning `""` for unclassified nodes; now returns `"other"`
 Phase tagging (max-M heuristic) unchanged from Phase 1; full CLI-boundary
 tagging deferred to Phase 4.
 
-### Phase 4 — VLM CLI wrapper (1 day)
+### Phase 4 — VLM CLI wrapper ✅
 
-`vlm_op_profiler` accepts the same args as `llama-mtmd-cli` plus `--out-dir <path>`, `--steps <N>` (cap on decode tokens), `--include-vision-encode` (profile the image-encoder graph independently of the LLM body). Output goes to `<out-dir>/{trace.jsonl, run_meta.json}`.
+`cli/vlm_op_profiler.py` accepts the same args as `llama-mtmd-cli` plus the
+profiler-specific flags below; everything else is forwarded unchanged.
+Outputs land in `<out-dir>/{trace.jsonl, run_meta.json}`.
+
+| Flag | Behaviour |
+|------|-----------|
+| `--out-dir <path>` | Output directory (created if missing); also exported as `PROFSTATS_OUT_DIR` |
+| `--steps <N>` | Cap on decode graphs to record (`0` = unlimited); exported as `PROFSTATS_MAX_STEPS` |
+| `--include-vision-encode` | Also record vision-encoder graphs (detected by `GGML_OP_CONV_2D` presence); exported as `PROFSTATS_INCLUDE_VISION_ENCODE`. Default skips them so `trace.jsonl` reflects the LLM body only. |
+| `--mtmd-cli <path>` | Explicit path to `llama-mtmd-cli` (auto-located in the Docker image) |
+
+`run_meta.json` is written *before* exec into `llama-mtmd-cli` so it lands
+even when inference subsequently fails. Fields include profiler/llama-cpp
+commit SHAs (baked at `make docker-build` time via `--build-arg`),
+SHA-256 of model/mmproj/image, prompt, ISO-8601 `run_id`, host, platform,
+arch, and best-effort `inner_backend`. Full schema in
+`docs/output_format.md § run_meta.json`.
+
+Vision-encoder distinction uses a simple structural heuristic: a graph is
+tagged `phase = "vision_encode"` iff it contains a `CONV_2D` node, which
+in llama.cpp is exclusive to image patch embedding. Tracked separately
+from prefill/decode counts in `PhaseTracker`.
 
 ### Phase 5 — model suite & runner (1 day)
 

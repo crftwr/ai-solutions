@@ -32,8 +32,16 @@ all: docker-build
 # ---------------------------------------------------------------------------
 
 ## docker-build: build the Docker image (includes llama.cpp + backend + CLI)
+##   Bakes the current profiler + llama.cpp commit SHAs into the image so
+##   that run_meta.json reports correct provenance at runtime.
+PROFILER_COMMIT := $(shell git -C "$(REPO_ROOT)" rev-parse HEAD 2>/dev/null || echo unknown)
+LLAMA_COMMIT    := $(shell git -C "$(REPO_ROOT)/vlm_op_profiler/third_party/llama.cpp" rev-parse HEAD 2>/dev/null || echo unknown)
+
 docker-build:
-	docker build -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
+	docker build \
+	    --build-arg PROFILER_COMMIT=$(PROFILER_COMMIT) \
+	    --build-arg LLAMA_COMMIT=$(LLAMA_COMMIT) \
+	    -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
 
 ## docker-run: run vlm-op-profiler --help inside the container
 docker-run: docker-build
@@ -112,6 +120,10 @@ smoke-test: docker-build
 	@test -f "$(SMOKE_MMPROJ)" || { echo "mmproj not found: $(SMOKE_MMPROJ)"; echo "Run: make fetch-models"; exit 1; }
 	@test -f "$(SMOKE_IMAGE)"  || { echo "Image not found: $(SMOKE_IMAGE)"; echo "Add an image to assets/example.jpg"; exit 1; }
 	@mkdir -p "$(SMOKE_OUT)"
+	@rm -f "$(SMOKE_OUT)/trace.jsonl" "$(SMOKE_OUT)/run_meta.json"
+	# Tolerate non-zero exit from llama-mtmd-cli — known SmolVLM token-ID
+	# issue still produces a valid warmup trace + run_meta.json. See
+	# docs/supported_models.md § SmolVLM-Instruct.
 	docker run --rm \
 	    -v "$(MODELS_DIR):/app/models:ro" \
 	    -v "$(RESULTS_DIR):/app/results" \
@@ -119,16 +131,25 @@ smoke-test: docker-build
 	    $(DOCKER_IMAGE):$(DOCKER_TAG) \
 	    --out-dir /app/results/smoke-test \
 	    --steps 2 \
+	    --include-vision-encode \
 	    --model  /app/models/$(notdir $(SMOKE_MODEL)) \
 	    --mmproj /app/models/$(notdir $(SMOKE_MMPROJ)) \
 	    --image  /app/assets/example.jpg \
 	    -n 20 \
-	    -p $(SMOKE_PROMPT)
+	    -p $(SMOKE_PROMPT); true
 	@echo ""
 	@echo "==> Checking trace.jsonl..."
 	@test -f "$(SMOKE_OUT)/trace.jsonl" && \
 	    echo "  trace.jsonl exists (lines: $$(wc -l < $(SMOKE_OUT)/trace.jsonl))" || \
 	    { echo "FAIL: trace.jsonl NOT found in $(SMOKE_OUT)/"; exit 1; }
+	@echo "==> Checking run_meta.json..."
+	@test -f "$(SMOKE_OUT)/run_meta.json" || \
+	    { echo "FAIL: run_meta.json NOT found in $(SMOKE_OUT)/"; exit 1; }
+	@python3 -c "import json,sys; \
+	    m=json.load(open('$(SMOKE_OUT)/run_meta.json')); \
+	    req=['profiler_version','profiler_commit','llama_commit','model_path','model_sha256','image_path','image_sha256','run_id','platform','inner_backend','include_vision_encode']; \
+	    missing=[k for k in req if k not in m]; \
+	    sys.exit(f'missing keys: {missing}') if missing else print('  run_meta.json has all required keys; profiler_commit=%s llama_commit=%s' % (m['profiler_commit'][:12], m['llama_commit'][:12]))"
 	@echo "==> Smoke test PASSED."
 
 ## fetch-model-text: download Llama-3.2-1B (public, 800 MB) for text-only smoke tests

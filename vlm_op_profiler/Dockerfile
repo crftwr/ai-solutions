@@ -83,6 +83,14 @@ FROM ubuntu:24.04 AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Provenance — passed through `make docker-build` via --build-arg. Used by
+# vlm_op_profiler.py to populate run_meta.json (.git is not available inside
+# the runtime image, so we bake the SHAs at build time).
+ARG PROFILER_COMMIT=unknown
+ARG LLAMA_COMMIT=unknown
+ENV PROFILER_COMMIT=$PROFILER_COMMIT
+ENV LLAMA_COMMIT=$LLAMA_COMMIT
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \

@@ -43,7 +43,7 @@ One JSON object per line, one line per executed `ggml` node.
 | Field | Type | Notes |
 |-------|------|-------|
 | `step` | uint64 | Same as `graph_id`; provided for readability |
-| `phase` | string | `"prefill"` or `"decode"` |
+| `phase` | string | `"prefill"`, `"decode"`, or `"vision_encode"` (the last only appears when `--include-vision-encode` is set) |
 | `graph_id` | uint64 | Monotonically increasing per-process counter |
 | `node_idx` | uint32 | Index of this node within the graph's node array |
 | `op` | string | `ggml_op_name()` value, e.g. `"MUL_MAT"`, `"SOFT_MAX"` |
@@ -155,23 +155,40 @@ Human-readable Markdown tables derived from `report.csv`.  Includes:
 
 ## run_meta.json
 
+Written by `cli/vlm_op_profiler.py` before exec'ing into `llama-mtmd-cli`.
+All fields are best-effort; missing values are emitted as `null`.
+
 ```json
 {
-  "profiler_version": "0.1.0",
-  "profiler_commit":  "<git sha>",
-  "llama_commit":     "<git sha>",
-  "model_path":       "<path>",
-  "model_sha256":     "<hex>",
-  "gguf_metadata":    { ... },
-  "prompt":           "<string>",
-  "image_path":       "<path or null>",
-  "image_sha256":     "<hex or null>",
-  "run_id":           "<ISO-8601>",
-  "host":             "<hostname>",
-  "platform":         "macOS | Linux",
-  "inner_backend":    "cpu | metal | cuda"
+  "profiler_version":      "0.1.0-dev",
+  "profiler_commit":       "<git sha or 'unknown'>",
+  "llama_commit":          "<git sha or 'unknown'>",
+  "model_path":            "<path or null>",
+  "model_sha256":          "<hex or null>",
+  "mmproj_path":           "<path or null>",
+  "mmproj_sha256":         "<hex or null>",
+  "gguf_metadata":         {},
+  "prompt":                "<string or null>",
+  "image_path":            "<path or null>",
+  "image_sha256":          "<hex or null>",
+  "run_id":                "<ISO-8601 UTC>",
+  "host":                  "<hostname>",
+  "platform":              "macOS | Linux | ...",
+  "arch":                  "<machine arch, e.g. x86_64 / arm64>",
+  "inner_backend":         "cpu | metal | cuda",
+  "include_vision_encode": true | false
 }
 ```
+
+Notes:
+
+- `profiler_commit` / `llama_commit` are baked into the Docker image at
+  `make docker-build` time via `--build-arg`; outside Docker, they are
+  resolved by walking up from the CLI script to the nearest `.git`.
+- `gguf_metadata` is reserved for later phases; currently always `{}`.
+- `include_vision_encode` reflects whether the `--include-vision-encode`
+  flag was passed and therefore whether `trace.jsonl` may contain
+  `phase: "vision_encode"` rows.
 
 ---
 

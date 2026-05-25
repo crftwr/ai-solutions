@@ -9,10 +9,13 @@
 // Configuration is through environment variables so that the vlm_op_profiler
 // CLI wrapper can configure the backend without linking against it:
 //
-//   PROFSTATS_OUT_DIR        Output directory  (default: ./profstats_out)
-//   PROFSTATS_INNER_BACKEND  Inner backend name: "cpu" | "metal" | "cuda"
-//                            (default: "cpu"; auto-selects best if unset)
-//   PROFSTATS_MAX_STEPS      Cap on decode graphs to record (default: 0 = all)
+//   PROFSTATS_OUT_DIR                Output directory  (default: ./profstats_out)
+//   PROFSTATS_INNER_BACKEND          Inner backend name: "cpu" | "metal" | "cuda"
+//                                    (default: "cpu"; auto-selects best if unset)
+//   PROFSTATS_MAX_STEPS              Cap on decode graphs to record (default: 0 = all)
+//   PROFSTATS_INCLUDE_VISION_ENCODE  "1" to also record vision-encoder graphs
+//                                    (graphs containing CONV_2D); default skips them
+//                                    so trace.jsonl reflects the LLM body only.
 //
 // The functions below can also be called programmatically from a host that
 // links directly against libbackend_stats (used in unit tests).

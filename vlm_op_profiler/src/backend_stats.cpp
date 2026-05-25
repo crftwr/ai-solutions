@@ -9,8 +9,10 @@
 // output is bit-identical to an un-profiled run.
 //
 // Configuration (read once at first call):
-//   PROFSTATS_OUT_DIR      output directory     (default: ./profstats_out)
-//   PROFSTATS_MAX_STEPS    cap on decode graphs (default: 0 = unlimited)
+//   PROFSTATS_OUT_DIR                output directory     (default: ./profstats_out)
+//   PROFSTATS_MAX_STEPS              cap on decode graphs (default: 0 = unlimited)
+//   PROFSTATS_INCLUDE_VISION_ENCODE  if "1", also record vision-encoder graphs
+//                                    (graphs containing CONV_2D); default skips them
 
 #include "backend_stats.h"
 #include "graph_walker.h"
@@ -39,9 +41,10 @@
 // ---------------------------------------------------------------------------
 // Configuration — initialised once from environment variables
 // ---------------------------------------------------------------------------
-static std::string   g_output_dir  = "profstats_out";
-static std::size_t   g_max_steps   = 0;
-static bool          g_config_done = false;
+static std::string   g_output_dir            = "profstats_out";
+static std::size_t   g_max_steps             = 0;
+static bool          g_include_vision_encode = false;
+static bool          g_config_done           = false;
 static std::mutex    g_config_mu;
 
 static void ensure_config() {
@@ -49,18 +52,28 @@ static void ensure_config() {
     if (g_config_done) return;
     g_config_done = true;
 
-    const char * dir   = std::getenv("PROFSTATS_OUT_DIR");
-    const char * steps = std::getenv("PROFSTATS_MAX_STEPS");
+    const char * dir     = std::getenv("PROFSTATS_OUT_DIR");
+    const char * steps   = std::getenv("PROFSTATS_MAX_STEPS");
+    const char * vis_env = std::getenv("PROFSTATS_INCLUDE_VISION_ENCODE");
     if (dir   && *dir)   g_output_dir = dir;
     if (steps && *steps) g_max_steps  = static_cast<std::size_t>(std::atoi(steps));
+    if (vis_env && *vis_env) {
+        // "1", "true", "yes", "on" → enable
+        g_include_vision_encode =
+            (vis_env[0] == '1' || vis_env[0] == 't' || vis_env[0] == 'T' ||
+             vis_env[0] == 'y' || vis_env[0] == 'Y' ||
+             (vis_env[0] == 'o' && (vis_env[1] == 'n' || vis_env[1] == 'N')));
+    }
 
     // Create output directory (best-effort)
     std::string cmd = "mkdir -p '" + g_output_dir + "'";
     (void)std::system(cmd.c_str());
 
     fprintf(stderr,
-            "[profstats] interceptor active — out_dir=%s  max_steps=%zu\n",
-            g_output_dir.c_str(), g_max_steps);
+            "[profstats] interceptor active — out_dir=%s  max_steps=%zu"
+            "  include_vision_encode=%d\n",
+            g_output_dir.c_str(), g_max_steps,
+            g_include_vision_encode ? 1 : 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -137,14 +150,25 @@ static void record_graph(const struct ggml_cgraph * graph) {
     std::vector<NodeStats> records = walk_graph(graph, gid);
     if (records.empty()) return;
 
-    // Determine phase from max M dimension across MUL_MAT nodes.
+    // Vision-encoder graphs are identified by the presence of CONV_2D nodes,
+    // which llama.cpp uses only for image patch embedding. By default we skip
+    // them so trace.jsonl reflects the LLM body only; set
+    // PROFSTATS_INCLUDE_VISION_ENCODE=1 to include them.
+    bool is_vision_encode = false;
     int64_t max_m = 0;
     for (const auto & r : records) {
-        if (r.m > max_m) max_m = r.m;
+        if (r.op == "CONV_2D") is_vision_encode = true;
+        if (r.m  > max_m)      max_m = r.m;
+    }
+
+    if (is_vision_encode && !g_include_vision_encode) {
+        return;
     }
 
     std::lock_guard<std::mutex> lk(g_stats_mu);
-    const std::string phase = g_phase_tracker.classify(max_m);
+    const std::string phase = is_vision_encode
+        ? g_phase_tracker.classify_vision_encode()
+        : g_phase_tracker.classify(max_m);
     for (auto & r : records) r.phase = phase;
 
     g_pending.insert(g_pending.end(), records.begin(), records.end());
