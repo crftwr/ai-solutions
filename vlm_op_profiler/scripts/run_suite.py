@@ -77,6 +77,60 @@ DEFAULT_MODELS: list[ModelEntry] = [
         "Idefics3-8B-Llama3-Q4_K_M.gguf",
         "mmproj-Idefics3-8B-Llama3-f16.gguf",
     ),
+
+    # ----- edge / physical-AI / robotics models (kept in sync with
+    # fetch_models_hf.py's 'edge' suite). Models that are not present in
+    # --models-dir are silently skipped by the per-run check below.
+    ModelEntry(
+        "InternVL2-2B",
+        "InternVL2-2B-Q4_K_M.gguf",
+        "mmproj-InternVL2-2B-f16.gguf",
+    ),
+    ModelEntry(
+        "InternVL2-2B-Q8_0",
+        "InternVL2-2B-Q8_0.gguf",
+        "mmproj-InternVL2-2B-f16.gguf",
+    ),
+    ModelEntry(
+        "Qwen2.5-VL-3B-Instruct",
+        "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf",
+        "mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf",
+    ),
+    ModelEntry(
+        "moondream2",
+        "moondream2-text-model-f16.gguf",
+        "moondream2-mmproj-f16.gguf",
+    ),
+    ModelEntry(
+        "PaliGemma-2-3B",
+        "paligemma2-3b-pt-224-Q4_K_M.gguf",
+        "mmproj-paligemma2-3b-pt-224-f16.gguf",
+    ),
+    ModelEntry(
+        "Florence-2-base",
+        "Florence-2-base-ft-Q4_K_M.gguf",
+        None,
+    ),
+    ModelEntry(
+        "Gemma-3-4B-it",
+        "gemma-3-4b-it-Q4_K_M.gguf",
+        "mmproj-gemma-3-4b-it-f16.gguf",
+    ),
+    ModelEntry(
+        "SmolVLM-Instruct-Q8_0",
+        "SmolVLM-Instruct-Q8_0.gguf",
+        "mmproj-SmolVLM-Instruct-f16.gguf",
+    ),
+    ModelEntry(
+        "Phi-3.5-vision-instruct-Q8_0",
+        "Phi-3.5-vision-instruct-Q8_0.gguf",
+        "mmproj-Phi-3.5-vision-instruct-f16.gguf",
+    ),
+    ModelEntry(
+        "SmolVLM-Instruct-IQ3_M",
+        "SmolVLM-Instruct-IQ3_M.gguf",
+        "mmproj-SmolVLM-Instruct-f16.gguf",
+    ),
 ]
 
 DEFAULT_PROMPTS: list[str] = [

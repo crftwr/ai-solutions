@@ -201,43 +201,31 @@ from prefill/decode counts in `PhaseTracker`.
 ### Phase 5 — model suite & runner ✅
 
 **Model fetch** — `scripts/fetch_models_hf.py` (Python, run via
-`make fetch-models-suite SUITE=minimal|default|full`) downloads the suite
-into `models/`. Each entry pairs a main GGUF with its mmproj; missing /
-gated repos report per-file failures without aborting the suite, so a
-partial download still produces a usable set. The `default` suite covers:
+`make fetch-models-suite SUITE=minimal|default|edge|full`) downloads the
+selected suite into `models/`. Each entry pairs a main GGUF with its mmproj;
+missing / gated repos report per-file failures without aborting the suite,
+so a partial download still produces a usable set.
 
-- SmolVLM-Instruct (also the `minimal` smoke-test model)
-- LLaVA-1.6 Mistral 7B (LLaVA family)
-- Qwen2-VL 7B Instruct (Qwen2-VL family)
-- MiniCPM-V 2.6
-- Phi-3.5-vision-instruct
-- Pixtral-12B
-- Llama-3.2-11B-Vision-Instruct (gated — needs `HF_TOKEN` in `.env`)
-- Idefics3-8B (late-fusion contrast model)
+| Suite | Contents | Approx size (int4) |
+|-------|----------|-------------------|
+| `minimal` | SmolVLM-Instruct only — smoke-test fixture | ~2 GB |
+| `default` | minimal + 7 architecturally diverse general-purpose VLMs (LLaVA-1.6, Qwen2-VL-7B, MiniCPM-V 2.6, Phi-3.5-V, Pixtral-12B, Llama-3.2-11B-Vision*, Idefics3-8B) | ~80 GB |
+| `edge` | minimal + edge / physical-AI / robotics models (InternVL2-2B, Qwen2.5-VL-3B, moondream2, PaliGemma 2 3B, Florence-2 base, Gemma 3 4B-it) + Q8_0 / IQ3_M quants for SmolVLM / Phi-3.5-V / InternVL2-2B | ~25 GB |
+| `full` | every spec in the registry | ~180 GB |
 
+\* Llama-3.2-11B-Vision is gated; populate `HF_TOKEN` in `.env`.
 `HF_TOKEN` flows from `.env` → Makefile → container via `HF_TOKEN_ARG`.
 
-**TODO — Physical AI / edge models (not yet added):** The current suite covers
-general VLM architectures but is missing models commonly deployed on edge
-hardware (NVIDIA Jetson, Qualcomm AI SoCs) for physical AI / robotics workloads.
-The following should be added to `fetch_models_hf.py` and
-`docs/supported_models.md` in a future pass:
+The `edge` suite intentionally targets Jetson-class and Qualcomm AI SoC
+deployments — small models that fit in 4–8 GB plus extra quantization
+variants so the profiler captures the dominant low-precision dot-product
+pattern on the target hardware (int4 / int8 / sub-4-bit). See
+`docs/supported_models.md § Quantization variants on edge` for the
+per-quant rationale.
 
-| Model | Size | Priority | Notes |
-|-------|------|----------|-------|
-| InternVL2-2B (or InternVL2.5-2B) | 2B | High | Most widely used in robotics deployments; `bartowski` has GGUF |
-| Qwen2.5-VL-3B-Instruct | 3B | High | Successor to Qwen2-VL; 3B variant targets edge; already listed 🔲 in `docs/supported_models.md` but missing from fetch script |
-| moondream2 | ~2B | High | Explicitly designed for edge/embedded vision; popular in low-power robot perception |
-| PaliGemma 2 (3B) | 3B | Medium | Google robotics-lineage VLM; GGUF available on HF |
-| Florence-2 (base or large) | 0.23B / 0.77B | Medium | Sub-1B spatial AI model (grounding, detection, OCR-with-location); different MAC profile — no LLM body |
-| Gemma 3 vision (4B) | 4B | Medium | Compact Google multimodal; common base for edge fine-tunes |
-
-In addition, the fetch script currently downloads only `Q4_K_M`. For edge
-platforms with int8 acceleration (Jetson Orin tensor cores, Qualcomm AI 100),
-**Q8_0 variants** of at least a few models (e.g. SmolVLM, Phi-3.5,
-InternVL2-2B) should also be fetched to capture the dominant compute pattern
-on those devices. IQ4_XS / IQ3_M are worth adding for sub-4 GB embedded
-targets.
+Run-suite parity: `scripts/run_suite.py` carries the same model list, so
+once an edge model is fetched it is automatically exercised by
+`make run-suite`. Missing files are silently skipped per combination.
 
 **Test fixtures** — `scripts/generate_test_images.py` (run via
 `make gen-test-images`) produces three synthetic JPEGs at sizes that

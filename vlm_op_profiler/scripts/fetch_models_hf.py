@@ -7,10 +7,18 @@ skipped if already present (size > 0).
 
 Suites:
   minimal — SmolVLM only (~2 GB); used by smoke tests.
-  default — minimal + 7 architecturally diverse VLMs (~80 GB at Q4_K_M).
-  full    — default + larger variants (~160 GB).
+  default — minimal + 7 architecturally diverse general-purpose VLMs (~80 GB at Q4_K_M).
+  edge    — minimal + edge/robotics-oriented VLMs (InternVL2-2B, Qwen2.5-VL-3B,
+            moondream2, PaliGemma 2, Florence-2, Gemma 3 4B) plus Q8_0 / IQ3_M
+            quant variants for Jetson- and Qualcomm-class targets (~25 GB).
+  full    — every spec in the registry (~180 GB).
 
 Reads HF_TOKEN from env for gated repos. Public repos work without a token.
+
+NOTE on edge entries: GGUF repo / file names for newer VLMs drift upstream.
+Each entry below uses the most commonly attested HF path at the time of
+writing; the fetcher graceful-skips per-file 404s so a partial download is
+still useful. Update the registry as upstream conventions change.
 """
 
 import argparse
@@ -119,6 +127,95 @@ MODELS: list[ModelSpec] = [
         suite="default",
         notes="Late-fusion variant — included for architectural contrast.",
     ),
+
+    # ----- edge / physical-AI / robotics -----
+    ModelSpec(
+        name="InternVL2-2B",
+        repo="bartowski/InternVL2-2B-GGUF",
+        model_file="InternVL2-2B-Q4_K_M.gguf",
+        mmproj_file="mmproj-InternVL2-2B-f16.gguf",
+        suite="edge",
+        notes="Most widely used VLM in robotics deployments; small enough for Jetson Orin.",
+    ),
+    ModelSpec(
+        name="InternVL2-2B-Q8_0",
+        repo="bartowski/InternVL2-2B-GGUF",
+        model_file="InternVL2-2B-Q8_0.gguf",
+        mmproj_file="mmproj-InternVL2-2B-f16.gguf",
+        suite="edge",
+        notes="int8 variant — exercises tensor-core int8 dot-product paths.",
+    ),
+    ModelSpec(
+        name="Qwen2.5-VL-3B-Instruct",
+        repo="bartowski/Qwen2.5-VL-3B-Instruct-GGUF",
+        model_file="Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf",
+        mmproj_file="mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf",
+        suite="edge",
+        notes="3B successor to Qwen2-VL; common edge fine-tune base.",
+    ),
+    ModelSpec(
+        name="moondream2",
+        repo="vikhyatk/moondream2",
+        model_file="moondream2-text-model-f16.gguf",
+        mmproj_file="moondream2-mmproj-f16.gguf",
+        suite="edge",
+        notes=(
+            "Explicitly designed for embedded vision; ~2B params. Upstream "
+            "ships f16 only — quantize locally for IQ3_M / Q4_K_M evaluation."
+        ),
+    ),
+    ModelSpec(
+        name="PaliGemma-2-3B",
+        repo="bartowski/paligemma2-3b-pt-224-GGUF",
+        model_file="paligemma2-3b-pt-224-Q4_K_M.gguf",
+        mmproj_file="mmproj-paligemma2-3b-pt-224-f16.gguf",
+        suite="edge",
+        notes="Google robotics-lineage VLM (SigLIP + Gemma); 224 patch variant.",
+    ),
+    ModelSpec(
+        name="Florence-2-base",
+        repo="bartowski/Florence-2-base-ft-GGUF",
+        model_file="Florence-2-base-ft-Q4_K_M.gguf",
+        mmproj_file=None,
+        suite="edge",
+        notes=(
+            "0.23B sub-1B spatial AI model (grounding / detection / OCR-with-location). "
+            "No LLM body → different MAC profile from autoregressive VLMs. "
+            "mmproj is not applicable; vision encoder is the whole model."
+        ),
+    ),
+    ModelSpec(
+        name="Gemma-3-4B-it",
+        repo="bartowski/gemma-3-4b-it-GGUF",
+        model_file="gemma-3-4b-it-Q4_K_M.gguf",
+        mmproj_file="mmproj-gemma-3-4b-it-f16.gguf",
+        suite="edge",
+        notes="Compact Google multimodal; common base for edge fine-tunes.",
+    ),
+    ModelSpec(
+        name="SmolVLM-Instruct-Q8_0",
+        repo="ggml-org/SmolVLM-Instruct-GGUF",
+        model_file="SmolVLM-Instruct-Q8_0.gguf",
+        mmproj_file="mmproj-SmolVLM-Instruct-f16.gguf",
+        suite="edge",
+        notes="int8 SmolVLM — primary fixture for int8 dot-product profiling.",
+    ),
+    ModelSpec(
+        name="Phi-3.5-vision-instruct-Q8_0",
+        repo="bartowski/Phi-3.5-vision-instruct-GGUF",
+        model_file="Phi-3.5-vision-instruct-Q8_0.gguf",
+        mmproj_file="mmproj-Phi-3.5-vision-instruct-f16.gguf",
+        suite="edge",
+        notes="int8 Phi-3.5-V — covers a different attention shape than SmolVLM.",
+    ),
+    ModelSpec(
+        name="SmolVLM-Instruct-IQ3_M",
+        repo="ggml-org/SmolVLM-Instruct-GGUF",
+        model_file="SmolVLM-Instruct-IQ3_M.gguf",
+        mmproj_file="mmproj-SmolVLM-Instruct-f16.gguf",
+        suite="edge",
+        notes="Sub-4 GB embedded variant — exercises IQ3_M dot-product patterns.",
+    ),
 ]
 
 
@@ -127,15 +224,24 @@ MODELS: list[ModelSpec] = [
 # ---------------------------------------------------------------------------
 
 def select_suite(suite: str) -> list[ModelSpec]:
-    """Return models in the requested suite tier (lower tiers are included)."""
+    """Resolve a --suite name to the set of ModelSpecs to fetch.
+
+    Tiers are not strictly hierarchical: `edge` is its own axis (small / edge
+    / robotics models + extra quants) and intentionally excludes the larger
+    general-purpose VLMs in `default`. `full` includes everything.
+    """
     if suite == "minimal":
         levels = {"minimal"}
     elif suite == "default":
         levels = {"minimal", "default"}
+    elif suite == "edge":
+        levels = {"minimal", "edge"}
     elif suite == "full":
-        levels = {"minimal", "default", "full"}
+        levels = {"minimal", "default", "edge", "full"}
     else:
-        raise SystemExit(f"unknown --suite {suite!r}; expected minimal|default|full")
+        raise SystemExit(
+            f"unknown --suite {suite!r}; expected minimal|default|edge|full"
+        )
     return [m for m in MODELS if m.suite in levels]
 
 
@@ -186,9 +292,12 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument(
         "--suite",
-        choices=("minimal", "default", "full"),
+        choices=("minimal", "default", "edge", "full"),
         default="default",
-        help="Which suite tier to download (default: default).",
+        help=(
+            "Which suite tier to download. 'edge' covers small / robotics / "
+            "physical-AI VLMs plus Q8_0 / IQ3_M quants (default: default)."
+        ),
     )
     p.add_argument(
         "--out-dir",
