@@ -18,7 +18,7 @@ when a model is validated or when a known issue is resolved.
 
 | Model | Architecture | GGUF source | Status | Notes |
 |-------|-------------|------------|--------|-------|
-| Llama-3.2-1B-Instruct (text only) | Llama 3.2 | `bartowski/Llama-3.2-1B-Instruct-GGUF` | ✅ | Smoke test; confirms interceptor captures prefill+decode. No VLM encoder. |
+| Llama-3.2-1B-Instruct (text only) | Llama 3.2 | `bartowski/Llama-3.2-1B-Instruct-GGUF` | ✅ | Phase 3: 2012 records, 0 unclassified. All ops (MUL_MAT, FLASH_ATTN_EXT, RMS_NORM, ROPE, GLU, SET_ROWS, VIEW, PERMUTE, ADD, GET_ROWS, CPY) classified. |
 | LLaVA-1.6 Mistral 7B | LLaVA / CLIP + Mistral | `cjpais/llava-1.6-mistral-7b-gguf` | 🔲 | |
 | LLaVA-1.6 Vicuna 13B | LLaVA / CLIP + Vicuna | HuggingFace | 🔲 | |
 | Qwen2-VL 7B Instruct | Qwen2-VL | `Qwen/Qwen2-VL-7B-Instruct-GGUF` | 🔲 | |
@@ -27,7 +27,7 @@ when a model is validated or when a known issue is resolved.
 | MiniCPM-V 2.6 | MiniCPM-V | HuggingFace | 🔲 | |
 | Pixtral 12B | Pixtral | HuggingFace | 🔲 | |
 | Phi-3.5-Vision Instruct | Phi-3.5-V | HuggingFace | 🔲 | |
-| SmolVLM-Instruct | SmolVLM | `ggml-org/SmolVLM-Instruct-GGUF` | ❌ | See SmolVLM notes below. |
+| SmolVLM-Instruct | SmolVLM | `ggml-org/SmolVLM-Instruct-GGUF` | 🔧 | Phase 3: 751 prefill records captured before inference error; 0 unclassified. Inference fails on image token injection (see notes). |
 | Idefics3-8B | Idefics3 / SMOLLM | HuggingFace | 🔲 | |
 
 ---

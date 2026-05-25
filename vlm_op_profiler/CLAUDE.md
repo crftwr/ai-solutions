@@ -143,9 +143,34 @@ Extended `graph_walker.cpp` to compute `macs` for every op with non-trivial mult
 
 Full shape conventions and derivation in `docs/output_format.md § MAC formulas by op type`.
 
-### Phase 3 — layer classification & phase tagging (1.5 days)
+### Phase 3 — layer classification & phase tagging ✅
 
-Parse `tensor->name` (e.g. `blk.0.attn_q.weight`, `vision_model.encoder.layers.0.mlp.fc1`) and bucket ops into: `attn_qkv`, `attn_out`, `ffn_gate`, `ffn_up`, `ffn_down`, `norm`, `lm_head`, `vision_conv`, `vision_attn`, `vision_mlp`, `projector`, `other`. Keep the classifier table in `layer_classifier.cpp` so per-architecture extensions are local. Tag each graph as `prefill` (first forward of a request) or `decode` (subsequent single-token forwards) via `llama_decode` boundaries in the CLI wrapper. Exit criterion: every node in the default suite gets a non-`other` category, or is explicitly listed in `docs/supported_models.md` as a known gap.
+`layer_classifier.cpp` extended from 44 → 48 name patterns plus a new
+`classify_by_op` op-type fallback.  New coverage added:
+
+| Pattern / fallback | Category | Covers |
+|--------------------|----------|--------|
+| `cache_k`, `cache_v` | `attn_qkv` | KV-cache SET_ROWS / VIEW / PERMUTE |
+| `kq_mask` | `attn_qkv` | causal-mask CPY ops |
+| `__fattn__` | `attn_out` | FLASH_ATTN_EXT nodes |
+| `ffn_inp` | `attn_out` | residual ADD at FFN input |
+| `l_out` | `ffn_down` | residual ADD at layer output |
+| `ffn_swiglu` | `ffn_gate` | SwiGLU activation (GLU op) |
+| `GLU` op | `ffn_gate` | any remaining GLU nodes |
+| `GET_ROWS` op | `embd` | unnamed embedding lookups |
+| `ROPE` op | `attn_qkv` | rotary position embedding |
+| `SOFT_MAX` op | `attn_qkv` | attention score normalisation |
+| `RMS_NORM`/`LAYER_NORM`/`GROUP_NORM` op | `norm` | unnamed norm nodes |
+
+Fixed fallback: was returning `""` for unclassified nodes; now returns `"other"`.
+
+**Validated:**
+- Llama-3.2-1B-Instruct: 2012 records, **0 unclassified**.
+- SmolVLM-Instruct: 751 prefill records captured (inference blocked by token-ID
+  mismatch — see `docs/supported_models.md`), **0 unclassified** in captured trace.
+
+Phase tagging (max-M heuristic) unchanged from Phase 1; full CLI-boundary
+tagging deferred to Phase 4.
 
 ### Phase 4 — VLM CLI wrapper (1 day)
 
