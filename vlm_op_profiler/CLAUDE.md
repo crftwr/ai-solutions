@@ -197,20 +197,46 @@ tagged `phase = "vision_encode"` iff it contains a `CONV_2D` node, which
 in llama.cpp is exclusive to image patch embedding. Tracked separately
 from prefill/decode counts in `PhaseTracker`.
 
-### Phase 5 — model suite & runner (1 day)
+### Phase 5 — model suite & runner ✅
 
-`scripts/fetch_models_hf.py` (invoked via `make fetch-models-suite`) downloads the default suite into `models/`. Default suite is chosen for architectural diversity:
+**Model fetch** — `scripts/fetch_models_hf.py` (Python, run via
+`make fetch-models-suite SUITE=minimal|default|full`) downloads the suite
+into `models/`. Each entry pairs a main GGUF with its mmproj; missing /
+gated repos report per-file failures without aborting the suite, so a
+partial download still produces a usable set. The `default` suite covers:
 
-- LLaVA-style (e.g. LLaVA-1.6)
-- Qwen2-VL / Qwen2.5-VL family
-- Llama 3.2-Vision
+- SmolVLM-Instruct (also the `minimal` smoke-test model)
+- LLaVA-1.6 Mistral 7B (LLaVA family)
+- Qwen2-VL 7B Instruct (Qwen2-VL family)
 - MiniCPM-V 2.6
-- Pixtral
-- Phi-3.5-Vision
-- SmolVLM
-- One late-fusion variant (e.g. Idefics3) for contrast
+- Phi-3.5-vision-instruct
+- Pixtral-12B
+- Llama-3.2-11B-Vision-Instruct (gated — needs `HF_TOKEN` in `.env`)
+- Idefics3-8B (late-fusion contrast model)
 
-`run_suite.sh` iterates models x 3 representative prompts x 3 representative images and writes results under `results/<model>/<run-id>/`. Each combination is runnable in isolation for re-runs.
+`HF_TOKEN` flows from `.env` → Makefile → container via `HF_TOKEN_ARG`.
+
+**Test fixtures** — `scripts/generate_test_images.py` (run via
+`make gen-test-images`) produces three synthetic JPEGs at sizes that
+exercise different vision-encoder code paths:
+
+| File | Size | Pattern |
+|------|------|---------|
+| `assets/example_64.jpg` | 64×64 | deterministic xorshift noise |
+| `assets/example_224.jpg` | 224×224 | 8-cell color-block grid (typical CLIP ViT input) |
+| `assets/example_448.jpg` | 448×448 | smooth radial gradient (typical LLaVA-1.6 patch) |
+
+These are checked in so `make smoke-test` works without re-running the
+generator. Re-run only after changing the generator.
+
+**Suite runner** — `scripts/run_suite.py` (run via `make run-suite`,
+optional `SUITE_ARGS="--only SmolVLM --dry-run"`) iterates
+models × 3 prompts × 3 images and writes
+`results/<model>/<YYYYMMDDTHHMMSSZ>_<image>_<prompt>/`. Each combination
+is launched as its own subprocess so a single failure (e.g. SmolVLM's
+token-ID issue) doesn't abort the suite; combination directories are
+self-contained for easy re-runs. A `results/suite_<timestamp>.json`
+summary captures per-run exit codes for later inspection.
 
 ### Phase 6 — aggregation & reporting (1.5 days)
 

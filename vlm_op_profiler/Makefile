@@ -23,7 +23,7 @@ RESULTS_DIR   ?= $(abspath results)
 
 .PHONY: all docker-build docker-run docker-shell docker-clean \
         fetch-models fetch-models-suite fetch-model-text \
-        smoke-test smoke-test-text run-suite aggregate test lint help
+        gen-test-images smoke-test smoke-test-text run-suite aggregate test lint help
 
 all: docker-build
 
@@ -94,23 +94,25 @@ hf.hf_hub_download(repo, '$(SMOLVLM_MMPROJ)', local_dir='/models', token=tok); \
 print('Done.')\" && \
 	        echo 'Models saved to $(MODELS_DIR)/'"
 
-## fetch-models-suite: download full VLM suite (uses SUITE env var)
-fetch-models-suite:
+## fetch-models-suite: download the VLM model suite (SUITE=minimal|default|full)
+##   Uses the project's Docker image so huggingface_hub matches requirements.txt.
+##   Reads HF_TOKEN from .env for gated repos (e.g. Llama-3.2-Vision).
+fetch-models-suite: docker-build
 	docker run --rm \
-	    -v "$(MODELS_DIR):/models" \
-	    -v "$(abspath scripts):/scripts:ro" \
+	    -v "$(MODELS_DIR):/app/models" \
 	    $(HF_TOKEN_ARG) \
-	    --entrypoint bash \
-	    python:3.12-slim \
-	    -c "pip install -q 'huggingface_hub' && \
-	        python3 /scripts/fetch_models_hf.py --suite $${SUITE:-default} --out-dir /models"
+	    --entrypoint /app/.venv/bin/python \
+	    $(DOCKER_IMAGE):$(DOCKER_TAG) \
+	    scripts/fetch_models_hf.py \
+	        --suite $${SUITE:-default} \
+	        --out-dir /app/models
 
 ## smoke-test: end-to-end test with SmolVLM (downloads model first if needed)
 ##   Runs with --steps 2 to limit decode graphs, -n 20 to cap output tokens.
 ##   Verifies that trace.jsonl is produced under results/smoke-test/.
 SMOKE_MODEL  ?= $(MODELS_DIR)/$(SMOLVLM_MODEL)
 SMOKE_MMPROJ ?= $(MODELS_DIR)/$(SMOLVLM_MMPROJ)
-SMOKE_IMAGE  ?= $(abspath assets/example.jpg)
+SMOKE_IMAGE  ?= $(abspath assets/example_64.jpg)
 SMOKE_PROMPT ?= "Describe this image briefly."
 SMOKE_OUT    ?= $(RESULTS_DIR)/smoke-test
 
@@ -118,7 +120,7 @@ smoke-test: docker-build
 	@echo "==> Smoke test: checking files..."
 	@test -f "$(SMOKE_MODEL)"  || { echo "Model not found: $(SMOKE_MODEL)"; echo "Run: make fetch-models"; exit 1; }
 	@test -f "$(SMOKE_MMPROJ)" || { echo "mmproj not found: $(SMOKE_MMPROJ)"; echo "Run: make fetch-models"; exit 1; }
-	@test -f "$(SMOKE_IMAGE)"  || { echo "Image not found: $(SMOKE_IMAGE)"; echo "Add an image to assets/example.jpg"; exit 1; }
+	@test -f "$(SMOKE_IMAGE)"  || { echo "Image not found: $(SMOKE_IMAGE)"; echo "Run: make gen-test-images"; exit 1; }
 	@mkdir -p "$(SMOKE_OUT)"
 	@rm -f "$(SMOKE_OUT)/trace.jsonl" "$(SMOKE_OUT)/run_meta.json"
 	# Tolerate non-zero exit from llama-mtmd-cli — known SmolVLM token-ID
@@ -134,7 +136,7 @@ smoke-test: docker-build
 	    --include-vision-encode \
 	    --model  /app/models/$(notdir $(SMOKE_MODEL)) \
 	    --mmproj /app/models/$(notdir $(SMOKE_MMPROJ)) \
-	    --image  /app/assets/example.jpg \
+	    --image  /app/assets/example_64.jpg \
 	    -n 20 \
 	    -p $(SMOKE_PROMPT); true
 	@echo ""
@@ -209,17 +211,33 @@ smoke-test-text: docker-build
 	} || { echo "FAIL: trace.jsonl NOT found in $(TEXT_SMOKE_OUT)/"; exit 1; }
 	@echo "==> Text smoke test PASSED."
 
-## run-suite: run profiler over default model × prompt × image matrix
-run-suite:
+## gen-test-images: render the synthetic JPEGs used by run-suite into assets/.
+##   Outputs are checked into git so smoke-test works without re-running this;
+##   re-run only after intentionally changing the generator.
+gen-test-images: docker-build
+	docker run --rm \
+	    -v "$(abspath assets):/app/assets" \
+	    --entrypoint /app/.venv/bin/python \
+	    $(DOCKER_IMAGE):$(DOCKER_TAG) \
+	    scripts/generate_test_images.py --out-dir /app/assets
+
+## run-suite: run profiler over default model × prompt × image matrix.
+##   Per-run outputs land under results/<model>/<run_id>/{trace.jsonl,run_meta.json}.
+##   Pass extra args via SUITE_ARGS (e.g. SUITE_ARGS="--only SmolVLM --dry-run").
+run-suite: docker-build
 	docker run --rm \
 	    -v "$(MODELS_DIR):/app/models:ro" \
 	    -v "$(RESULTS_DIR):/app/results" \
-	    --entrypoint bash \
+	    -v "$(abspath assets):/app/assets:ro" \
+	    --entrypoint /app/.venv/bin/python \
 	    $(DOCKER_IMAGE):$(DOCKER_TAG) \
-	    scripts/run_suite.sh \
-	        --backend-lib /app/libbackend_stats.so \
-	        --cli /app/llama-mtmd-cli \
-	        --out-dir /app/results
+	    scripts/run_suite.py \
+	        --models-dir /app/models \
+	        --images-dir /app/assets \
+	        --out-root  /app/results \
+	        --profiler  /app/vlm_op_profiler.py \
+	        --include-vision-encode \
+	        $(SUITE_ARGS)
 
 ## aggregate: aggregate trace.jsonl files into report.csv / report.md
 aggregate:
