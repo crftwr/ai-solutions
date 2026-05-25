@@ -23,7 +23,8 @@ RESULTS_DIR   ?= $(abspath results)
 
 .PHONY: all docker-build docker-run docker-shell docker-clean \
         fetch-models fetch-models-suite fetch-model-text \
-        gen-test-images smoke-test smoke-test-text run-suite aggregate test lint help
+        gen-test-images smoke-test smoke-test-text run-suite aggregate summarize \
+        test lint help
 
 all: docker-build
 
@@ -239,13 +240,33 @@ run-suite: docker-build
 	        --include-vision-encode \
 	        $(SUITE_ARGS)
 
-## aggregate: aggregate trace.jsonl files into report.csv / report.md
-aggregate:
+## aggregate: aggregate trace.jsonl files into report.csv / report.md.
+##   Also writes per-run reports next to each trace.jsonl (--per-run).
+##   Pass AGGREGATE_ARGS="..." to forward extra args.
+aggregate: docker-build
 	docker run --rm \
 	    -v "$(RESULTS_DIR):/app/results" \
 	    --entrypoint /app/.venv/bin/python \
 	    $(DOCKER_IMAGE):$(DOCKER_TAG) \
-	    scripts/aggregate.py /app/results
+	    scripts/aggregate.py /app/results --per-run $(AGGREGATE_ARGS)
+
+## summarize: roll up every per-run report.csv into summary.csv/.md.
+##   Run `make aggregate` first to produce the per-run CSVs at
+##   results/<model>/<run_id>/report.csv.
+summarize: docker-build
+	docker run --rm \
+	    -v "$(RESULTS_DIR):/app/results" \
+	    --entrypoint bash \
+	    $(DOCKER_IMAGE):$(DOCKER_TAG) \
+	    -lc 'shopt -s nullglob globstar; \
+	         files=(/app/results/**/report.csv); \
+	         filtered=(); \
+	         for f in "$${files[@]}"; do [ "$$f" = "/app/results/report.csv" ] || filtered+=("$$f"); done; \
+	         if [ $${#filtered[@]} -eq 0 ]; then \
+	             echo "No per-run /app/results/<model>/<run_id>/report.csv — run \"make aggregate\" first."; \
+	             exit 1; \
+	         fi; \
+	         /app/.venv/bin/python scripts/summarize.py --out /app/results "$${filtered[@]}"'
 
 # ---------------------------------------------------------------------------
 ## Dev / test targets

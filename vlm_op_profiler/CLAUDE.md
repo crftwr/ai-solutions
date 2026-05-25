@@ -60,13 +60,14 @@ vlm_op_profiler/
 │                            then exec's llama-mtmd-cli (VLM) or llama-cli (text)
 │
 ├── scripts/
-│   ├── fetch_models_hf.py   Download GGUF VLM weights from Hugging Face (suite mode)
-│   ├── run_suite.sh         Execute the profiler across the model x prompt x image matrix
-│   ├── aggregate.py         Read trace.jsonl files, emit report.csv + report.md
-│   └── summarize.py         Cross-model executive summary
+│   ├── fetch_models_hf.py     Download GGUF VLM weights from Hugging Face (suite mode)
+│   ├── generate_test_images.py  Render the 3 synthetic JPEGs in assets/
+│   ├── run_suite.py           Execute the profiler across the model × prompt × image matrix
+│   ├── aggregate.py           Read trace.jsonl files, emit report.csv + report.md
+│   ├── summarize.py           Cross-model executive summary
+│   └── tests/                 pytest coverage for aggregate.py + summarize.py
 │
-├── assets/
-│   └── example.jpg          64×64 synthetic JPEG for smoke tests (committed to repo)
+├── assets/                  3 synthetic JPEGs (64/224/448 px) used by run_suite + smoke tests
 │
 ├── third_party/
 │   └── llama.cpp/           git submodule (registered in ai-solutions/.gitmodules),
@@ -216,6 +217,28 @@ partial download still produces a usable set. The `default` suite covers:
 
 `HF_TOKEN` flows from `.env` → Makefile → container via `HF_TOKEN_ARG`.
 
+**TODO — Physical AI / edge models (not yet added):** The current suite covers
+general VLM architectures but is missing models commonly deployed on edge
+hardware (NVIDIA Jetson, Qualcomm AI SoCs) for physical AI / robotics workloads.
+The following should be added to `fetch_models_hf.py` and
+`docs/supported_models.md` in a future pass:
+
+| Model | Size | Priority | Notes |
+|-------|------|----------|-------|
+| InternVL2-2B (or InternVL2.5-2B) | 2B | High | Most widely used in robotics deployments; `bartowski` has GGUF |
+| Qwen2.5-VL-3B-Instruct | 3B | High | Successor to Qwen2-VL; 3B variant targets edge; already listed 🔲 in `docs/supported_models.md` but missing from fetch script |
+| moondream2 | ~2B | High | Explicitly designed for edge/embedded vision; popular in low-power robot perception |
+| PaliGemma 2 (3B) | 3B | Medium | Google robotics-lineage VLM; GGUF available on HF |
+| Florence-2 (base or large) | 0.23B / 0.77B | Medium | Sub-1B spatial AI model (grounding, detection, OCR-with-location); different MAC profile — no LLM body |
+| Gemma 3 vision (4B) | 4B | Medium | Compact Google multimodal; common base for edge fine-tunes |
+
+In addition, the fetch script currently downloads only `Q4_K_M`. For edge
+platforms with int8 acceleration (Jetson Orin tensor cores, Qualcomm AI 100),
+**Q8_0 variants** of at least a few models (e.g. SmolVLM, Phi-3.5,
+InternVL2-2B) should also be fetched to capture the dominant compute pattern
+on those devices. IQ4_XS / IQ3_M are worth adding for sub-4 GB embedded
+targets.
+
 **Test fixtures** — `scripts/generate_test_images.py` (run via
 `make gen-test-images`) produces three synthetic JPEGs at sizes that
 exercise different vision-encoder code paths:
@@ -238,9 +261,48 @@ token-ID issue) doesn't abort the suite; combination directories are
 self-contained for easy re-runs. A `results/suite_<timestamp>.json`
 summary captures per-run exit codes for later inspection.
 
-### Phase 6 — aggregation & reporting (1.5 days)
+### Phase 6 — aggregation & reporting ✅
 
-`aggregate.py` reads all `trace.jsonl` under a results directory and produces `report.csv` (long format: model, phase, layer_category, op, src0_dtype, src1_dtype, dst_dtype, calls, macs) and `report.md` (human-readable tables). `summarize.py` reads multiple `report.csv` and produces a cross-model executive summary. Outputs must be deterministic given the same inputs.
+**`scripts/aggregate.py`** walks a results directory, loads every
+`<model>/<run_id>/trace.jsonl`, and writes:
+
+- `report.csv` — long-format, columns: `model, run_id, phase, layer_category,
+  op, src0_type, src1_type, dst_type, calls, macs`.
+- `report.md` — four sections:
+  1. **Top dtype combinations** (top 10 by descending MACs)
+  2. **MACs by layer category and phase** — pivot with one column per phase
+     (`prefill | decode | vision_encode`) plus a row total / % grand-total.
+  3. **Op type breakdown** — every op, sorted by descending MACs.
+  4. **Run metadata** — one row per discovered `run_meta.json` with model,
+     image, image-SHA prefix, llama_commit prefix, and prompt.
+
+Outputs are **deterministic**: rows are sorted by `(macs desc, then every
+group column ascending)` with `kind="mergesort"`; CSV uses `lineterminator="\n"`
+so files are byte-identical across operating systems. The aggregate test
+suite hashes outputs and re-runs to enforce this.
+
+The combined report lands at `<results_dir>/report.{csv,md}`. Passing
+`--per-run` (the Makefile default) also writes a report next to each
+`trace.jsonl` so individual runs are self-describing.
+
+**`scripts/summarize.py`** reads multiple per-run `report.csv` files and
+emits a cross-model executive summary at `--out/`:
+
+- `summary.csv` — columns: `model, src0_type, src1_type, dst_type, macs,
+  pct_of_total`, sorted by descending MACs.
+- `summary.md` — top-20 dtype combinations table + per-model MAC totals.
+
+CLI argument order does not affect output — input paths are sorted before
+processing. The summarize test suite verifies this and hashes outputs across
+two runs to enforce determinism.
+
+**Makefile**
+
+| Target | Purpose |
+|--------|---------|
+| `make aggregate` | Runs `aggregate.py --per-run /app/results` inside the Docker image. Forward extras via `AGGREGATE_ARGS=...`. |
+| `make summarize` | Roll up every `results/**/report.csv` (excluding the combined one) into `results/summary.{csv,md}`. Run `make aggregate` first. |
+| `make test`     | Runs `pytest scripts/tests/` inside the image — covers schema, totals, vision_encode handling, deterministic output, and argument-order independence. |
 
 ### Phase 7 — validation & docs (1 day)
 
