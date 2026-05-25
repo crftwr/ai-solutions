@@ -1,9 +1,15 @@
 // graph_walker.h
 //
 // Per-node statistics extracted from a ggml_cgraph.  Every executed ggml node
-// gets one NodeStats record.  For MUL_MAT / MUL_MAT_ID nodes the M/N/K fields
-// are populated and macs = 2*M*N*K; for other nodes macs = 0 (to be extended
-// in Phase 2).
+// gets one NodeStats record.
+//
+// MAC accounting (Phase 2) covers:
+//   MUL_MAT, MUL_MAT_ID  → M/N/K populated, macs = 2*M*N*K
+//   FLASH_ATTN_EXT        → macs = QK + AV cost; M/N/K = 0 (fused op)
+//   CONV_2D               → M/N/K = output positions/channels/kernel volume
+//   SSM_CONV, SSM_SCAN    → macs from Mamba depthwise conv / selective scan
+//   RWKV_WKV6, RWKV_WKV7 → macs from RWKV linear attention kernel
+//   All other ops         → macs = 0 (no significant multiply-accumulate)
 //
 // This header is used by both backend_stats.cpp (producer) and aggregate.py's
 // companion C++ test (consumer via FFI).
@@ -43,7 +49,7 @@ struct NodeStats {
     int64_t m   = 0;
     int64_t n   = 0;
     int64_t k   = 0;
-    int64_t macs = 0;  ///< 2*M*N*K for MatMul; extended in Phase 2
+    int64_t macs = 0;  ///< 2*M*N*K for MatMul/MoE; attention/conv/SSM/RWKV formulas in graph_walker.cpp
 
     // Classification (populated by layer_classifier.h and phase_tracker.h)
     std::string layer_category;  ///< e.g. "attn_qkv", "ffn_down", "vision_mlp"

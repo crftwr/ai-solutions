@@ -127,9 +127,21 @@ Env vars read by `libbackend_stats`:
 - `PROFSTATS_OUT_DIR` — output directory for `trace.jsonl`
 - `PROFSTATS_MAX_STEPS` — stop after N decode steps (0 = unlimited)
 
-### Phase 2 — MatMul MAC accounting (1 day)
+### Phase 2 — MAC accounting for all significant ops ✅
 
-For `GGML_OP_MUL_MAT` and `GGML_OP_MUL_MAT_ID`, compute M, N, K from `src0->ne` and `src1->ne` (respecting transposition conventions) and record `macs = 2 * M * N * K`. For other reduction ops (`GGML_OP_RWKV_WKV`, `GGML_OP_SSM_*`, conv variants), document the formula in `docs/output_format.md` and apply it. Exit criterion: total MACs reported for a 7B LLM decode step is within 1% of a published FLOP count for that model.
+Extended `graph_walker.cpp` to compute `macs` for every op with non-trivial multiply-accumulate cost:
+
+| Op | Formula |
+|----|---------|
+| `GGML_OP_MUL_MAT` | `2·M·N·K` (Phase 1) |
+| `GGML_OP_MUL_MAT_ID` | `2·K·N·n_expert_used·n_tokens` (M=n_expert_used×n_tokens) |
+| `GGML_OP_FLASH_ATTN_EXT` | `2·n_q·B·Sq·Skv·(D+Dv)` — counts both QK and AV matmuls |
+| `GGML_OP_CONV_2D` | `2·OW·OH·N·OC·KW·KH·IC` (treated as equivalent matmul) |
+| `GGML_OP_SSM_CONV` | `2·d_inner·n_t·n_s·d_conv` (Mamba depthwise conv) |
+| `GGML_OP_SSM_SCAN` | `2·d_state·head_dim·n_head·n_t·n_seqs` (Mamba selective scan) |
+| `GGML_OP_RWKV_WKV6/7` | `2·S²·H·n_tokens` (outer product + contraction per head) |
+
+Full shape conventions and derivation in `docs/output_format.md § MAC formulas by op type`.
 
 ### Phase 3 — layer classification & phase tagging (1.5 days)
 

@@ -53,8 +53,49 @@ One JSON object per line, one line per executed `ggml` node.
 | `src0.ne` | int64[4] | Element counts, innermost-first (`ne[0]` = row length) |
 | `src1.*` | — | Same as `src0`; all zeros if node has no second source |
 | `dst.*` | — | Destination tensor dtype and shape |
-| `m`, `n`, `k` | int64 | MatMul dimensions; 0 for non-matmul ops |
-| `macs` | int64 | `2*M*N*K` for MUL_MAT; extended in Phase 2 for other ops |
+| `m`, `n`, `k` | int64 | MatMul dimensions; 0 for ops with no single rectangular decomposition |
+| `macs` | int64 | Multiply-accumulate count; formula depends on op (see below) |
+
+### MAC formulas by op type
+
+The `macs` field uses the formula below for each op.  For all other ops
+`macs = 0` (no significant multiply-accumulate work).
+
+| Op | Tensor shapes | `m` | `n` | `k` | `macs` formula |
+|----|--------------|-----|-----|-----|----------------|
+| `MUL_MAT` | src0=[K,N,…], src1=[K,M,…] | M=src1.ne[1] | N=src0.ne[1] | K=src0.ne[0] | `2·M·N·K` |
+| `MUL_MAT_ID` | src0=[K,N,n_exp], src1=[K,e_used,n_tok], src2=[e_used,n_tok] | e_used·n_tok | N | K | `2·M·N·K` |
+| `FLASH_ATTN_EXT` | q=[D,n_q,Sq,B], k=[D,n_kv,Skv,B], v=[Dv,n_kv,Skv,B] | 0 | 0 | 0 | `2·n_q·B·Sq·Skv·(D+Dv)` |
+| `CONV_2D` | kernel=[KW,KH,IC,OC], data=[W,H,IC,N], dst=[OW,OH,OC,N] | OW·OH·N | OC | KW·KH·IC | `2·m·n·k` |
+| `SSM_CONV` | sx=[d_conv-1+n_t,d_inner,n_s], c=[d_conv,d_inner], dst=[d_inner,n_t,n_s] | 0 | 0 | 0 | `2·d_inner·n_t·n_s·d_conv` |
+| `SSM_SCAN` | state=[d_state,hdim,n_head], x=[hdim,n_head,n_t,n_seqs] | 0 | 0 | 0 | `2·d_state·hdim·n_head·n_t·n_seqs` |
+| `RWKV_WKV6` | k=[S,H,n_tok] | 0 | 0 | 0 | `2·S²·H·n_tok` |
+| `RWKV_WKV7` | r=[S,H,n_tok] | 0 | 0 | 0 | `2·S²·H·n_tok` |
+
+**Notes:**
+
+- `MUL_MAT_ID` is the MoE routed matmul (Mixtral, Qwen-MoE, etc.).  `M` is the
+  total (expert_used × token) pairs across the batch; `m/n/k` are populated
+  and satisfy `macs = 2·m·n·k`.
+
+- `FLASH_ATTN_EXT` counts both the Q·K^T matmul (`2·n_q·B·Sq·Skv·D`) and the
+  A·V matmul (`2·n_q·B·Sq·Skv·Dv`) in a single field.  When `D == Dv` (the
+  common case) this simplifies to `4·n_q·B·Sq·Skv·D`.  `m/n/k` are left
+  at 0 because the operation is not a single rectangular matmul.
+
+- `CONV_2D` is treated as an equivalent matmul of shape
+  (OW·OH·N) × OC over inner dimension KW·KH·IC, so `macs = 2·m·n·k`.
+
+- `SSM_CONV` is the Mamba depthwise conv-1d on a rolling state window.  It is
+  a per-channel 1-D dot product of length `d_conv` applied at each of
+  `d_inner·n_t·n_s` positions.
+
+- `SSM_SCAN` counts the two dominant multiply steps per timestep per head:
+  the B·x outer product and the C·state contraction, each costing
+  `d_state×head_dim` multiply-accumulates.
+
+- `RWKV_WKV6/7` counts the k⊗v outer product and the r·state contraction,
+  both of size S² per head per token.
 
 ### Layer categories
 
