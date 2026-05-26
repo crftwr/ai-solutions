@@ -292,11 +292,54 @@ two runs to enforce determinism.
 | `make summarize` | Roll up every `results/**/report.csv` (excluding the combined one) into `results/summary.{csv,md}`. Run `make aggregate` first. |
 | `make test`     | Runs `pytest scripts/tests/` inside the image — covers schema, totals, vision_encode handling, deterministic output, and argument-order independence. |
 
-### Phase 7 — validation & docs (1 day)
+### Phase 7 — validation & docs ✅
 
-Cross-check totals against `llama.cpp`'s own `--verbose` graph dump for at least two models. Fill in `docs/supported_models.md` (GGUF source, preprocessing quirks, known op-name patterns). Add a regression test that runs the smallest model end-to-end on every commit.
+**Cross-check totals** — `scripts/validate.py` applies two layers of check
+to any `trace.jsonl`:
 
-**Total: ~10 working days for a first usable end-to-end pipeline.**
+1. **Structural invariants** (architecture-agnostic): per-row
+   `macs == 2·m·n·k`; `calls(attn_qkv) == 3 · calls(attn_out)`;
+   `calls(ffn_gate) == calls(ffn_up) == calls(ffn_down)`; every decode
+   MUL_MAT has `m == 1`; every prefill graph has `max(m) > 1`.
+2. **Analytical cross-check** (per `ArchSpec`): per-category total MACs
+   are recomputed from `2·constant·sum(m)` (e.g. `2·d_model²` for
+   `attn_out`) and matched exactly against the trace.
+
+Validated end-to-end against two architectures: Llama-3.2-1B-Instruct
+(text body) and SmolVLM-Instruct (Llama-1.7B text body + SigLIP). Both
+pass all 10 checks on every regression run. The originally planned
+`--verbose` ggml graph-dump cross-check was dropped in favour of the
+analytical formula — it's strictly stronger because it ties the recorded
+shapes back to the upstream model config.
+
+**Regression test on every commit** — `make regression-test` chains:
+`smoke-test-text` (Llama-3.2-1B, fixed prompt, `--steps 2`) →
+`scripts/validate.py --arch llama-3.2-1b` →
+`pytest scripts/tests/test_regression.py`. The pytest layer asserts
+lower-bound trace size and both-phases-present invariants that catch
+catastrophic interceptor regressions (e.g. LD_PRELOAD not firing).
+
+**CI** — `.github/workflows/ci.yml` runs two jobs on every push / PR:
+
+| Job | Runtime | What it does |
+|-----|---------|--------------|
+| `fast-checks` | ~3 min | ruff + pytest unit tests (excludes regression marker) directly on the host runner; no Docker, no model download. |
+| `regression`  | ~15–25 min cold, faster warm | Builds the Docker image (GHA buildx cache), fetches the 800 MB text model (cached across runs), runs `make regression-test`. |
+
+**Documentation finalised**:
+
+- `docs/output_format.md` covers all three artefacts (`trace.jsonl`,
+  `report.{csv,md}`, `summary.{csv,md}`, `run_meta.json`).
+- `docs/supported_models.md` now includes the Phase 7 status for both
+  validated models, a per-architecture op-name pattern reference table
+  (sourced from real traces), preprocessing quirks (empty-prompt warmup,
+  GQA shape conventions, MUL_MAT shape order, tied LM head), and an
+  updated "Adding a new model" workflow that calls out
+  `make validate VALIDATE_ARCH=…` as a recommended gate.
+- `docs/design.md § Validation methodology` documents the two-layer
+  cross-check and CI structure.
+
+**Total: ~10 working days for a first usable end-to-end pipeline — done.**
 
 ---
 

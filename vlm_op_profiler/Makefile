@@ -24,7 +24,7 @@ RESULTS_DIR   ?= $(abspath results)
 .PHONY: all docker-build docker-run docker-shell docker-clean \
         fetch-models fetch-models-suite fetch-model-text \
         gen-test-images smoke-test smoke-test-text run-suite aggregate summarize \
-        test lint help
+        validate regression-test test lint help
 
 all: docker-build
 
@@ -272,12 +272,44 @@ summarize: docker-build
 ## Dev / test targets
 # ---------------------------------------------------------------------------
 
-## test: run Python unit tests (inside Docker)
+## test: run fast Python unit tests (no model inference needed).
 test: docker-build
 	docker run --rm \
 	    --entrypoint /app/.venv/bin/pytest \
 	    $(DOCKER_IMAGE):$(DOCKER_TAG) \
-	    scripts/tests/ -v
+	    scripts/tests/ -v --deselect scripts/tests/test_regression.py
+
+## validate: run structural + analytical MAC cross-checks on an existing trace.
+##   Pass VALIDATE_PATH and VALIDATE_ARCH:
+##     make validate VALIDATE_PATH=/app/results/smoke-test-text VALIDATE_ARCH=llama-3.2-1b
+VALIDATE_PATH ?= /app/results
+VALIDATE_ARGS ?=
+validate: docker-build
+	docker run --rm \
+	    -v "$(RESULTS_DIR):/app/results" \
+	    --entrypoint /app/.venv/bin/python \
+	    $(DOCKER_IMAGE):$(DOCKER_TAG) \
+	    scripts/validate.py $(VALIDATE_PATH) $(if $(VALIDATE_ARCH),--arch $(VALIDATE_ARCH)) $(VALIDATE_ARGS)
+
+## regression-test: end-to-end gate, suitable for every commit.
+##   Runs the text smoke-test (fast — ~1 GB model, ~30s), then validate.py +
+##   pytest scripts/tests/test_regression.py against the resulting trace.jsonl.
+##   Requires `make fetch-model-text` to have populated the model once.
+regression-test: docker-build smoke-test-text
+	@echo "==> regression-test: validating trace.jsonl ..."
+	docker run --rm \
+	    -v "$(RESULTS_DIR):/app/results" \
+	    --entrypoint /app/.venv/bin/python \
+	    $(DOCKER_IMAGE):$(DOCKER_TAG) \
+	    scripts/validate.py /app/results/smoke-test-text/trace.jsonl \
+	        --arch llama-3.2-1b
+	@echo "==> regression-test: pytest invariants ..."
+	docker run --rm \
+	    -v "$(RESULTS_DIR):/app/results" \
+	    --entrypoint /app/.venv/bin/pytest \
+	    $(DOCKER_IMAGE):$(DOCKER_TAG) \
+	    scripts/tests/test_regression.py -v
+	@echo "==> regression-test PASSED."
 
 ## lint: run ruff on Python sources (inside Docker)
 lint:

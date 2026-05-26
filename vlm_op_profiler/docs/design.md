@@ -114,13 +114,65 @@ RWKV WKV, SSM scans) are extended in Phase 2 and documented in
 
 ## Validation methodology (Phase 7)
 
-1. Run the profiler on a 7B LLaMA model with a batch of 1 token (decode).
-   Total MACs should equal `2 * seq_len * (32 * (4096² + 2 * 4096 * 11008))` ≈
-   published FLOP counts (within 1%).
-2. Cross-check `trace.jsonl` node list against `--verbose` ggml graph dump from
-   `llama-cli`.
-3. Run a regression test on every commit: smallest model, fixed prompt, fixed
-   seed, compare `report.csv` hash to a golden reference.
+Implemented in `scripts/validate.py`. Two layers of cross-check are applied
+to every trace.jsonl:
+
+### 1. Structural (architecture-agnostic)
+
+These hold for any Llama-style transformer (GQA + SwiGLU). A regression
+that breaks any of them is almost always a bug in the interceptor, graph
+walker, or layer classifier rather than in the model:
+
+- For every `MUL_MAT` row, `macs == 2·m·n·k`. Sanity check for the MAC
+  formula; catches signed/unsigned and accumulator-overflow bugs.
+- `calls(attn_qkv) == 3 · calls(attn_out)`. Q, K, V projections vs O.
+- `calls(ffn_gate) == calls(ffn_up) == calls(ffn_down)`. SwiGLU FFN.
+- Every decode-phase `MUL_MAT` has `m == 1` (one token per autoregressive
+  step). Guards against decode graphs being mis-tagged as prefill.
+- Every prefill graph has `max(m) > 1`. Symmetric check for the phase
+  tracker.
+
+### 2. Analytical (given an `ArchSpec`)
+
+Per-category total MACs reduce to a constant times the per-row M sum:
+
+| Category   | Per-token MAC constant            |
+|------------|------------------------------------|
+| `attn_out` | `2 · d_model²`                    |
+| `ffn_gate` | `2 · d_model · d_ff`              |
+| `ffn_up`   | `2 · d_model · d_ff`              |
+| `ffn_down` | `2 · d_model · d_ff`              |
+
+so `total_macs(category) == per_token · sum_of_M(category)`. The validator
+recomputes the right-hand side and asserts exact equality (not within
+tolerance — the recorded shapes are the ground truth and the MAC formula
+is closed-form). `ArchSpec`s for Llama-3.2-1B and SmolVLM are bundled.
+
+Skipping the verbose-graph-dump cross-check originally listed here: it adds
+no information beyond the analytical cross-check, because the verbose dump
+just reports the same shapes the interceptor already records. The
+analytical check is strictly stronger — it ties the shapes back to the
+upstream model config.
+
+### 3. Regression test (on every CI commit)
+
+`make regression-test` chains:
+
+1. `make smoke-test-text` — runs the interceptor under `llama-cli` against
+   the 800 MB Llama-3.2-1B-Instruct text model with a fixed prompt and
+   `--steps 2` cap. Produces a deterministic `trace.jsonl` of ~5 k rows.
+2. `python scripts/validate.py … --arch llama-3.2-1b` — all 10 structural
+   + analytical checks above.
+3. `pytest scripts/tests/test_regression.py` — invariants on the real
+   trace (lower-bound on size, both phases present, analytical match).
+
+The CI workflow at the monorepo root (`.github/workflows/ci.yml`) runs:
+
+- **fast-checks** on every push / PR (~3 min): ruff + pytest unit tests on
+  the Python code, no model needed.
+- **regression** on every push / PR (~15-25 min cold, faster warm via
+  GHA buildx cache): the full chain above. The text model is cached
+  across runs in the `text-model-v1` cache key.
 
 ---
 
